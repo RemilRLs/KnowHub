@@ -2,3 +2,6 @@ fastapi
 uvicorn[standard]
 pydantic
 pydantic-settings
+dramatiq[redis]
+redis
+watchfiles
