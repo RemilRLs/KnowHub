@@ -1,7 +1,7 @@
+# app/tasks/actors.py
 import dramatiq
-from . import broker
+from . import results_backend  
 
-@dramatiq.actor(max_retries=3)
-def ingest_document(document_id: str):
-    print(f"Processing document with ID: {document_id}")
-    return "test"
+@dramatiq.actor(store_results=True, max_retries=3)
+def ingest_document(doc_id: str):
+    return {"ok": True, "doc_id": doc_id}
