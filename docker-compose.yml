@@ -1,0 +1,74 @@
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend 
+    container_name: backend-knowhub-dev
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --port 8000
+      --reload --reload-dir /app/app
+    ports:
+      - "8000:8000" 
+    volumes:
+      - ./backend/app:/app/app:rw
+    env_file:
+      - ./backend/.env
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8000/api/v1/health/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s 
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - appnet
+    
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend
+    container_name: worker-knowhub-dev
+    command: dramatiq app.tasks --processes 2 --threads 4
+    env_file:
+      - ./backend/.env
+    volumes:
+      - ./backend/app:/app/app:rw
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 1m
+    networks:
+      - appnet
+
+  redis:
+    image: redis:8.2.1-bookworm
+    container_name: redis-knowhub
+    command: ["sh","-c","exec redis-server /usr/local/etc/redis/redis.conf --requirepass \"$$REDIS_PASSWORD\""]
+    env_file:
+      - ./backend/.env
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./backend/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - redis-data:/data
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+      
+    restart: unless-stopped
+    networks:
+      - appnet
+
+volumes:
+  redis-data:
+
+networks:
+  appnet:
