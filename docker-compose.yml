@@ -22,6 +22,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - appnet
@@ -38,6 +40,8 @@ services:
       - ./backend/app:/app/app:rw
     depends_on:
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     restart: unless-stopped
     stop_grace_period: 1m
@@ -66,9 +70,30 @@ services:
     restart: unless-stopped
     networks:
       - appnet
+  
+  minio:
+    image: minio/minio:latest
+    container_name: minio-knowhub
+    command: server /data --console-address ":9001"
+    env_file:
+      - ./backend/.env
+    ports:
+      - "9000:9000" # API S3.
+      - "9001:9001" # Web console.
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - appnet
 
 volumes:
   redis-data:
+  minio-data:
 
 networks:
   appnet:
