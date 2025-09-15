@@ -33,7 +33,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile.backend
     container_name: worker-knowhub-dev
-    command: dramatiq app.tasks --processes 2 --threads 4
+    command: bash -lc 'python -m watchfiles --filter python "dramatiq app.tasks --processes 2 --threads 4"'
     env_file:
       - ./backend/.env
     volumes:
