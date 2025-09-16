@@ -1,3 +1,5 @@
+import logging
+
 # FastAPI.
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -24,6 +26,8 @@ from app.api.v1.schemas.ingest import JobStatusReq
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
 minio_client = MinioClient()
 
 # Check SHA-256.
@@ -31,6 +35,7 @@ minio_client = MinioClient()
 @router.post("/upload/presign", response_model=PresignResp)
 def presign_upload(req: PresignReq):
     doc_id = str(uuid4())
+    logger.info(f"Creating presigned upload for doc_id={doc_id}, filename={req.filename}")
     s3_key = f"uploads/{doc_id}/{req.filename}"
 
     expires_in = 600 
