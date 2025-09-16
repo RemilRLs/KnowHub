@@ -1,4 +1,5 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
 from typing import Optional
 
 class PresignReq(BaseModel):
@@ -18,6 +19,9 @@ class EnqueueReq(BaseModel):
     s3_key: str
     filename: str
     collection: str
+    checksum_sha256: str = Field(
+        description="SHA-256 checksum of the file to be uploaded to verify integrity."
+    )
 
 class EnqueueReq(BaseModel):
     doc_id: str

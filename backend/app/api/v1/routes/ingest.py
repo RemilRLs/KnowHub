@@ -11,7 +11,7 @@ from dramatiq.results.errors import ResultMissing, ResultTimeout
 
 from uuid import uuid4
 
-from app.tasks.ingest import ingest_document
+from app.tasks.ingest import validate_and_promote
 from app.core.minio_client import MinioClient # Bucket client for MinIO/S3.
 from app.core.job_utils import build_message_for
 
@@ -59,11 +59,12 @@ def enqueue_after_upload(req: EnqueueReq):
     if not minio_client.object_exists(req.s3_key):
         raise HTTPException(status_code=404, detail=f"S3 key not found: {req.s3_key}")
     
-    msg: Message = ingest_document.send(
+    msg: Message = validate_and_promote.send(
         doc_id=req.doc_id,
         s3_key=req.s3_key,
         filename=req.filename,
         collection=req.collection,
+        checksum_sha256=req.checksum_sha256,
     )
 
     return {
