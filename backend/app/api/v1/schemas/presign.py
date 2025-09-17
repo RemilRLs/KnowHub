@@ -1,18 +1,25 @@
 from pydantic import BaseModel, Field
 
-from typing import Optional
+from typing import Optional, List
 
 class PresignReq(BaseModel):
     filename: str
-    collection: str
+    collection: str # TODO : To delete
     content_type: Optional[str] = None
+
+class BatchPresignReq(BaseModel):
+    collection: str
+    files: List[PresignReq]
 
 class PresignResp(BaseModel):
     doc_id: str
     s3_key: str
     upload_url: str
-    expires_in: int
     headers: dict
+    expires_in: int
+
+class BatchPresignResp(BaseModel):
+    items = List[PresignResp]
 
 class EnqueueReq(BaseModel):
     doc_id: str

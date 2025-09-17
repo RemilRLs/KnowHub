@@ -1,4 +1,5 @@
 import logging
+import pathlib
 
 # FastAPI.
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,9 +15,9 @@ from uuid import uuid4
 from app.tasks.ingest import validate_and_promote
 from app.core.minio_client import MinioClient # Bucket client for MinIO/S3.
 from app.core.job_utils import build_message_for
+from app.core.settings import Settings
 
 from app.tasks import results_backend
-
 
 
 
@@ -34,10 +35,36 @@ minio_client = MinioClient()
 
 @router.post("/upload/presign", response_model=PresignResp)
 def presign_upload(req: PresignReq):
+    """
+    Handles the creation of a presigned URL for uploading a file to S3.
+    Endpoint:
+        POST /upload/presign
+    Args:
+        req (PresignReq): The request payload containing the filename and optional content type.
+    Returns:
+        PresignResp: A response object containing the following:
+            - doc_id (str): A unique identifier for the document.
+            - s3_key (str): The S3 key where the file will be stored.
+            - upload_url (str): The presigned URL for uploading the file.
+            - expires_in (int): The expiration time (in seconds) for the presigned URL.
+            - headers (dict): Additional headers required for the upload.
+    Raises:
+        HTTPException: If the file extension is not allowed, a 400 status code is returned with an error message.
+    Notes:
+        - The allowed file extensions are retrieved from the application settings.
+        - The presigned URL is generated using the MinIO client and is valid for 10 minutes (600 seconds).
+        - The `Content-Type` header defaults to "application/octet-stream" if not provided in the request.
+    """
+    allowed_extensions = Settings.get_allowed_extensions()
+    file_extension = pathlib.Path(req.filename).suffix.lower()
+
+    if file_extension not in allowed_extensions:
+        raise HTTPException(status_code=400, detail=f"File extension not allowed: {req.filename}")
+
     doc_id = str(uuid4())
     logger.info(f"Creating presigned upload for doc_id={doc_id}, filename={req.filename}")
     s3_key = f"uploads/{doc_id}/{req.filename}"
-
+    
     expires_in = 600 
 
     url = minio_client.presigned_put_url(
@@ -56,6 +83,15 @@ def presign_upload(req: PresignReq):
 
 @router.post("/ingest/enqueue")
 def enqueue_after_upload(req: EnqueueReq):
+    """
+    Handles the enqueueing of a document for processing after it has been uploaded.
+    Args:
+        req (EnqueueReq): The request payload containing details about the document to be enqueued.
+    Raises:
+        HTTPException: If the specified S3 key does not exist, a 404 error is raised.
+    Returns:
+        dict: A dictionary containing the job ID and the queue name where the document was enqueued.
+    """
     if not minio_client.object_exists(req.s3_key):
         raise HTTPException(status_code=404, detail=f"S3 key not found: {req.s3_key}")
     
@@ -74,6 +110,20 @@ def enqueue_after_upload(req: EnqueueReq):
 
 @router.get("/ingest/status")
 def job_status(req: JobStatusReq = Depends()):
+    """
+    Endpoint to check the status of a job.
+    Args:
+        req (JobStatusReq): Dependency-injected request object containing the job ID 
+            and queue information, as well as optional wait time in milliseconds.
+    Returns:
+        dict: A dictionary containing the status of the job and, if available, the result.
+            - If the job is completed, returns {"status": "done", "result": result}.
+            - If the job is still pending, returns {"status": "pending"}.
+            - If the request times out while waiting for the result, returns {"status": "timeout"}.
+    Raises:
+        ResultMissing: If the result for the given job ID is not found.
+        ResultTimeout: If the operation times out while waiting for the result.
+    """
     msg = build_message_for(req.job_id, req.queue)
 
     try:
@@ -86,38 +136,4 @@ def job_status(req: JobStatusReq = Depends()):
     except ResultTimeout:
         return {"status": "timeout"}
 
-
-# @router.post("/upload")
-# async def upload_and_enqueue(
-#     files: List[UploadFile] = File(...),
-#     collection: str = Form(...)
-# ):
-#     jobs: List[Dict] = []
-#     try:
-#         for f in files:
-#             doc_id = str(uuid4())
-#             s3_key = f"uploads/{doc_id}/{f.filename}"
-
-#             data = await f.read()
-#             minio_client.put_bytes(
-#                 s3_key, data, content_type=f.content_type or "application/octet-stream"
-#             )
-
-#             msg: Message = ingest_document.send(
-#                 doc_id=doc_id,
-#                 s3_key=s3_key,
-#                 filename=f.filename,
-#                 collection=collection,
-#             )
-
-#             jobs.append({
-#                 "job_id": msg.message_id,
-#                 "queue": msg.queue_name,
-#                 "doc_id": doc_id,
-#                 "s3_key": s3_key,
-#             })
-            
-#         return JSONResponse({"count": len(jobs), "jobs": jobs})
-#     except Exception as e:
-#         raise HTTPException(status_code=400, detail=f"Upload/Enqueue failed: {type(e).__name__}: {e}")
     

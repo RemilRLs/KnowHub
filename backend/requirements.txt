@@ -10,3 +10,5 @@ langchain
 langchain-community
 pypdf
 watchfiles
+unstructured
+docx
