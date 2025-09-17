@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from typing import Optional, List
+from typing import Dict, Optional, List
 
 class PresignReq(BaseModel):
     filename: str
@@ -15,20 +15,24 @@ class PresignResp(BaseModel):
     doc_id: str
     s3_key: str
     upload_url: str
-    headers: dict
+    headers: Dict[str, str]
     expires_in: int
 
 class BatchPresignResp(BaseModel):
-    items = List[PresignResp]
+    items: List[PresignResp]
 
 class EnqueueReq(BaseModel):
     doc_id: str
     s3_key: str
     filename: str
-    collection: str
+    collection: str # TODO: To delete
     checksum_sha256: str = Field(
         description="SHA-256 checksum of the file to be uploaded to verify integrity."
     )
+
+class EnqueueBatchReq(BaseModel):
+    collection: str
+    items: List[EnqueueReq]
 
 class EnqueueReq(BaseModel):
     doc_id: str

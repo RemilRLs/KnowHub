@@ -22,7 +22,7 @@ from app.tasks import results_backend
 
 
 # Base Models.
-from app.api.v1.schemas.presign import PresignReq, PresignResp, EnqueueReq
+from app.api.v1.schemas.presign import PresignReq, PresignResp, EnqueueReq, BatchPresignResp, BatchPresignReq, EnqueueBatchReq
 from app.api.v1.schemas.ingest import JobStatusReq
 
 
@@ -31,7 +31,35 @@ logger = logging.getLogger(__name__)
 
 minio_client = MinioClient()
 
-# Check SHA-256.
+@router.post("/upload/presign/batch", response_model=BatchPresignResp)
+def presign_batch(req: BatchPresignReq):
+    expires_in = 600
+    out = []
+
+    for f in req.files:
+        doc_id = str(uuid4())
+        logger.info(f"Creating presigned upload for doc_id={doc_id}, filename={f.filename}")
+        s3_key = f"uploads/{doc_id}/{f.filename}"
+
+        headers = {"Content-Type": f.content_type or "application/octet-stream"}
+
+        url = minio_client.presigned_put_url(
+            key=s3_key,
+            expires_seconds=expires_in,
+        )
+
+        out.append(PresignResp(
+            doc_id=doc_id,
+            s3_key=s3_key,
+            upload_url=url,
+            headers=headers,
+            expires_in=expires_in,
+        ))
+
+    return BatchPresignResp(
+        items=out
+    )
+
 
 @router.post("/upload/presign", response_model=PresignResp)
 def presign_upload(req: PresignReq):
@@ -80,6 +108,13 @@ def presign_upload(req: PresignReq):
         headers={"Content-Type": req.content_type or "application/octet-stream"},
     )
 
+
+@router.post("/ingest/enqueue/batch", response_model=EnqueueBatchReq)
+def enqueue_batch(req: EnqueueBatchReq):
+    """
+    TODO
+    """
+    
 
 @router.post("/ingest/enqueue")
 def enqueue_after_upload(req: EnqueueReq):
