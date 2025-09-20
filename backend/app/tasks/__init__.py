@@ -1,4 +1,3 @@
-# app/tasks/setup.py
 import os, dramatiq
 
 from dramatiq.brokers.redis import RedisBroker
@@ -17,6 +16,8 @@ broker = RedisBroker(url=REDIS_URL)
 broker.add_middleware(Results(backend=results_backend))
 dramatiq.set_broker(broker)
 
+print("[Worker] Broker + Results middleware initialized")
+
 # Actors
 
-from .ingest import ingest_document
+from .ingest import ingest_document, validate_and_promote

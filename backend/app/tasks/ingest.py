@@ -25,7 +25,7 @@ minio_client = MinioClient()
 class IngestError(Exception):
     pass
 
-@dramatiq.actor(store_results=True, max_retries=0, queue_name="ingest-validate")
+@dramatiq.actor(store_results=True, max_retries=3, queue_name="ingest-validate")
 def validate_and_promote(doc_id: str, 
                          s3_key: str, 
                          filename: str, 
@@ -67,11 +67,14 @@ def validate_and_promote(doc_id: str,
             collection=collection,
         )
 
+        
+
         return {
             "stage": "validated",
             "doc_id": doc_id,
             "processed_key": processed_key,
             "next_job_id": next_msg.message_id,
+            "actor": next_msg.actor_name,
             "meta": {"size": meta.get("size"), "etag": meta.get("etag")},
         }
 

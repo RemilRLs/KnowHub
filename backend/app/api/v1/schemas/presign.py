@@ -33,6 +33,12 @@ class EnqueueReq(BaseModel):
 class EnqueueBatchReq(BaseModel):
     collection: str
     items: List[EnqueueReq]
+    
+class EnqueueBatchResp(BaseModel):
+    collection: str
+    job_ids: List[str]
+    file_refused: List[str]
+    queue: Optional[str] = None
 
 class EnqueueReq(BaseModel):
     doc_id: str

@@ -1,5 +1,6 @@
 import logging
 import pathlib
+from typing import List, Optional
 
 # FastAPI.
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,7 +23,7 @@ from app.tasks import results_backend
 
 
 # Base Models.
-from app.api.v1.schemas.presign import PresignReq, PresignResp, EnqueueReq, BatchPresignResp, BatchPresignReq, EnqueueBatchReq
+from app.api.v1.schemas.presign import PresignReq, PresignResp, EnqueueReq, BatchPresignResp, BatchPresignReq, EnqueueBatchReq, EnqueueBatchResp
 from app.api.v1.schemas.ingest import JobStatusReq
 
 
@@ -109,13 +110,39 @@ def presign_upload(req: PresignReq):
     )
 
 
-@router.post("/ingest/enqueue/batch", response_model=EnqueueBatchReq)
+@router.post("/ingest/enqueue/batch", response_model=EnqueueBatchResp)
 def enqueue_batch(req: EnqueueBatchReq):
-    """
-    TODO
-    """
-    
+    job_ids: List[str] = []
+    file_refused: List[str] = []
+    queue_name: Optional[str] = None
 
+    for item in req.items:
+        if not minio_client.object_exists(item.s3_key):
+            file_refused.append(item.doc_id)
+            logger.warning("S3 key not found, skipping: %s", item.s3_key)
+            continue
+
+        msg: Message = validate_and_promote.send(
+            doc_id=item.doc_id,
+            s3_key=item.s3_key,
+            filename=item.filename,
+            collection=req.collection,
+            checksum_sha256=item.checksum_sha256,
+        )
+
+        job_ids.append(msg.message_id)
+        if queue_name is None:
+            queue_name = msg.queue_name
+
+    return EnqueueBatchResp(
+        collection=req.collection,
+        job_ids=job_ids,
+        file_refused=file_refused,
+        queue=queue_name,
+    )
+
+
+    
 @router.post("/ingest/enqueue")
 def enqueue_after_upload(req: EnqueueReq):
     """
@@ -138,9 +165,12 @@ def enqueue_after_upload(req: EnqueueReq):
         checksum_sha256=req.checksum_sha256,
     )
 
+    logger.info(f"Message : {msg}")
+
     return {
         "job_id": msg.message_id,
         "queue": msg.queue_name,
+        "actor": msg.actor_name,
         }
 
 @router.get("/ingest/status")
@@ -159,7 +189,7 @@ def job_status(req: JobStatusReq = Depends()):
         ResultMissing: If the result for the given job ID is not found.
         ResultTimeout: If the operation times out while waiting for the result.
     """
-    msg = build_message_for(req.job_id, req.queue)
+    msg = build_message_for(req.job_id, req.queue, req.actor_name)
 
     try:
         result = results_backend.get_result(
