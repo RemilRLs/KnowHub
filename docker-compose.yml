@@ -11,6 +11,7 @@ services:
       - "8000:8000" 
     volumes:
       - ./backend/app:/app/app:rw
+      - ./backend/logs:/app/logs:rw
     env_file:
       - ./backend/.env
     healthcheck:

@@ -6,4 +6,9 @@ dramatiq[redis, results]
 redis
 minio
 python-multipart
+langchain
+langchain-community
+pypdf
 watchfiles
+unstructured
+python-docx
