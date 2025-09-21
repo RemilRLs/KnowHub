@@ -66,6 +66,7 @@ class DocumentLoader:
         for file_path in file_paths:
             try:
                 docs = self._load_one(Path(file_path))
+                logger.info(f"Docs : {docs}")
                 all_docs.extend(docs)
                 logger.info("Loaded %d document(s) from %s", len(docs), file_path)
             except Exception as e:
