@@ -34,7 +34,9 @@ class DocumentNormalizer:
             docs: Iterable[Document],
     ) -> List[Document]:
         """
-        Normalize a list of documents.
+        Normalize a list of documents
+        - Clean text (whitespace, dehyphenation, unicode normalization)
+        - Add ingestion metadata (ingested_at, file_name, ext)
         """
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         out: List[Document] = [] 
