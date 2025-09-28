@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 from pathlib import Path
 
 from app.pipeline.loader import DocumentLoader
+from app.pipeline.normalize import DocumentNormalizer
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -26,13 +27,16 @@ class IngestPipeline:
         """
         logger.info("Ingest: loading %d file(s)", len(file_paths))
         paths = [Path(p) for p in file_paths]
-        loaded_docs: List[Document] = self.loader.load_documents(paths)
+        loaded_docs = self.loader.load_documents(paths)
         logger.info("Ingest: loaded %d document(s)", len(loaded_docs))
+
+        normalizer = DocumentNormalizer()
+        normalized_docs = normalizer.normalize(loaded_docs)
 
         return {
             "doc_id": doc_id,
             "collection": collection,
-            "documents": loaded_docs,
+            "documents": normalized_docs,
         }
 
 
