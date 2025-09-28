@@ -1,7 +1,9 @@
 import logging
 
+from app.core.hash_utils import compute_sha256
+
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Optional, Dict
 from langchain_core.documents import Document
 from langchain_community.document_loaders import (
     PyPDFLoader,
@@ -63,12 +65,30 @@ class DocumentLoader:
 
         all_docs: List[Document] = []
 
+
+
         for file_path in file_paths:
             try:
-                docs = self._load_one(Path(file_path))
-                all_docs.extend(docs)
-                logger.info("Loaded %d document(s) from %s", len(docs), file_path)
+                p = Path(file_path)
+                docs = self._load_one(p)
+                if not isinstance(docs, list):
+                    logger.warning("Loader for %s returned %r, coercing to []", p, type(docs))
+                    docs = []
+
+                logger.info("Loaded %d document(s) from %s", len(docs), p)
+
+                file_hash = compute_sha256(p)
+
+                enriched_docs: List[Document] = []
+                for d in docs:
+                    meta = dict(d.metadata or {})
+                    meta["file_sha256"] = file_hash
+                    enriched_docs.append(Document(page_content=d.page_content, metadata=meta))
+
+                all_docs.extend(enriched_docs)
+
             except Exception as e:
                 logger.exception("Error loading %s: %s", file_path, e)
                 continue
+
         return all_docs

@@ -1,6 +1,7 @@
 import logging
 import pathlib
 from typing import List, Optional
+from time import time
 
 # FastAPI.
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,6 +10,10 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from dramatiq.message import Message
 from dramatiq.results.errors import ResultMissing, ResultTimeout
+
+# Redis
+
+from app.core.redis_config import redis_client
 
 
 from uuid import uuid4
@@ -101,6 +106,24 @@ def presign_upload(req: PresignReq):
         expires_seconds=expires_in
     )
 
+    # Writing into Redis
+
+    key = f"upload:{doc_id}"
+    now = int(time())
+    data = {
+        "doc_id": doc_id,
+        "s3_key": s3_key,
+        "filename": req.filename,
+        "status": "presigned",
+        "created_at": str(now),
+        "expires_at": str(now + expires_in),
+    }
+
+    pipe = redis_client.pipeline()
+    pipe.hset(key, mapping=data)
+    pipe.expire(key, expires_in + 120)
+    pipe.execute()
+
     return PresignResp(
         doc_id=doc_id,
         s3_key=s3_key,
@@ -154,6 +177,15 @@ def enqueue_after_upload(req: EnqueueReq):
     Returns:
         dict: A dictionary containing the job ID and the queue name where the document was enqueued.
     """
+    key = f"upload:{req.doc_id}"
+    stored = redis_client.hgetall(key)
+    
+    if not stored or stored.get("s3_key") != req.s3_key:
+        raise HTTPException(status_code=400, detail="doc_id and s3_key do not match any known upload.")
+
+    if not stored or stored.get("doc_id") != req.doc_id:
+        raise HTTPException(status_code=400, detail="doc_id and s3_key do not match any known upload.")
+
     if not minio_client.object_exists(req.s3_key):
         raise HTTPException(status_code=404, detail=f"S3 key not found: {req.s3_key}")
     

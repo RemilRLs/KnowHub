@@ -15,6 +15,7 @@ from minio.commonconfig import CopySource
 from app.core.hash_utils import verify_sha256
 from app.core.settings import Settings
 
+from app.pipeline.ingest_pipeline import IngestPipeline
 from app.pipeline.loader import DocumentLoader
 
 
@@ -101,8 +102,16 @@ def ingest_document(doc_id: str,
             dest_path=str(local_path),
         )
 
+
         loader = DocumentLoader()
-        docs = loader.load_documents([downloaded_path])
+        pipeline = IngestPipeline(
+            loader=loader,
+        )
+        docs = pipeline.ingest(
+            file_paths=[downloaded_path],
+            doc_id=doc_id,
+            collection=collection
+        )
 
         # TODO: split -> embeddings -> upsert pgvector here
 
@@ -110,6 +119,6 @@ def ingest_document(doc_id: str,
             "stage": "indexed",
             "doc_id": doc_id,
             "processed_key": s3_key,
-            "pages_loaded": len(docs),
+            "pages_loaded": len(docs.get("documents", [])),
             "collection": collection,
         }

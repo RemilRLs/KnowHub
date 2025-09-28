@@ -23,3 +23,22 @@ def verify_sha256(file_path: Path, expected_hash: str) -> bool:
     computed = sha256.hexdigest() # We get the hexadecimal representation of the hash.
 
     return hmac.compare_digest(computed.lower(), expected_hash.lower())
+
+def compute_sha256(file_path: Path) -> str:
+    """
+    Compute the SHA-256 hash of a file.
+
+    Args:
+        file_path (str | Path): Path to the file to hash.
+
+    Returns:
+        str: The SHA-256 hash of the file in hexadecimal.
+    """
+    file_path = Path(file_path)
+
+    sha256 = hashlib.sha256()
+
+    with file_path.open("rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha256.update(chunk)
+    return sha256.hexdigest()
