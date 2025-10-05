@@ -13,3 +13,5 @@ watchfiles
 unstructured
 python-docx
 markdown
+pgvector
+psycopg[binary]

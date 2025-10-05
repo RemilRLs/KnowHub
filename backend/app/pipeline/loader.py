@@ -58,6 +58,10 @@ class DocumentLoader:
         loader_cls = LOADER_MAPPING[ext]
         loader = loader_cls(str(p))
         docs = loader.load()
+
+        if ext == ".pdf":
+            for d in docs:
+                d.metadata["page"] = d.metadata.get("page", 0) + 1
         return docs
 
     def load_documents(self, file_paths: List[Path]) -> List[Document]:

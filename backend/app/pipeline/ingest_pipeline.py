@@ -7,15 +7,18 @@ from app.pipeline.loader import DocumentLoader
 from app.pipeline.normalize import DocumentNormalizer
 from app.pipeline.splitter import DocumentSplitter
 
-from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from app.core.pgvector import PgVectorStore
+from app.config.config import PGVECTOR_DSN
 
 logger = logging.getLogger(__name__)
 
 class IngestPipeline:
     def __init__(self, 
-                 loader: DocumentLoader):
+                 loader: DocumentLoader,
+                 dsn: str = PGVECTOR_DSN
+                 ):
         self.loader = loader
+        self.dsn = dsn
 
     def ingest(
         self,
@@ -36,6 +39,14 @@ class IngestPipeline:
 
         splitter = DocumentSplitter()
         split_docs = splitter.split(normalized_docs)
+
+        print(split_docs)
+
+        pgvector_store = PgVectorStore(dsn=self.dsn)
+        pgvector_store.create_vector_collection(collection, dim=1024, index_type="hnsw")
+        pgvector_store.insert_chunks(split_docs, collection)
+
+
 
         return {
             "doc_id": doc_id,
