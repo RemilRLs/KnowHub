@@ -12,3 +12,4 @@ pypdf
 watchfiles
 unstructured
 python-docx
+markdown

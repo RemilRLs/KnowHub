@@ -9,6 +9,7 @@ from langchain_community.document_loaders import (
     PyPDFLoader,
     UnstructuredWordDocumentLoader,
     UnstructuredPowerPointLoader,
+    UnstructuredMarkdownLoader,
     TextLoader,
 )
 
@@ -19,6 +20,7 @@ LOADER_MAPPING = {
     ".docx": UnstructuredWordDocumentLoader,
     ".pptx": UnstructuredPowerPointLoader,
     ".txt": TextLoader,
+    ".md": TextLoader,
 }
 
 

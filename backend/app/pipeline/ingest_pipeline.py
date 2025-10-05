@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.pipeline.loader import DocumentLoader
 from app.pipeline.normalize import DocumentNormalizer
+from app.pipeline.splitter import DocumentSplitter
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -32,6 +33,9 @@ class IngestPipeline:
 
         normalizer = DocumentNormalizer()
         normalized_docs = normalizer.normalize(loaded_docs)
+
+        splitter = DocumentSplitter()
+        split_docs = splitter.split(normalized_docs)
 
         return {
             "doc_id": doc_id,
