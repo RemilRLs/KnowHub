@@ -20,7 +20,7 @@ LOADER_MAPPING = {
     ".docx": UnstructuredWordDocumentLoader,
     ".pptx": UnstructuredPowerPointLoader,
     ".txt": TextLoader,
-    ".md": UnstructuredMarkdownLoader,
+    ".md": TextLoader,
 }
 
 
