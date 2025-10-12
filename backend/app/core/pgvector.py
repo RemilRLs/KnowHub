@@ -20,7 +20,7 @@ class PgVectorStore:
         self.dsn = dsn
         self.schema = schema
         self.pg_utils = PgVectorUtils()
-
+    
         self.connection_db()
 
 
@@ -270,6 +270,8 @@ class PgVectorStore:
         """
         insert_chunks_grouped_by_source_skip_existing
         """
+
+        print(f"Preparing {len(docs)} chunks for insertion into collection '{collection}'")
 
         texts, metadata = self.pg_utils.prepare_chunks(docs)
 

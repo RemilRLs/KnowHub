@@ -1,10 +1,12 @@
-FROM python:3.11-slim AS base 
+# FROM python:3.11-slim AS base
+FROM pytorch/pytorch:2.8.0-cuda12.9-cudnn9-runtime AS base
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl \
  && rm -rf /var/lib/apt/lists/*
 
- WORKDIR /app
+
+WORKDIR /app
 
 # Install dependencies.
 COPY requirements.txt /tmp/requirements.txt
@@ -14,8 +16,18 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 COPY app ./app
 
 # Run as non-root user.
-RUN useradd -m appuser && chown -R appuser:appuser /app
+RUN useradd -m -u 1000 appuser \
+ && mkdir -p /home/appuser/.cache/huggingface \
+ && chown -R appuser:appuser /home/appuser
+
+
+RUN chown -R appuser:appuser /app
 USER appuser
+
+
+
+ENV HF_HOME=/home/appuser/.cache/huggingface
+
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
