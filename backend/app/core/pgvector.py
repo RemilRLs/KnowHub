@@ -3,7 +3,7 @@ import os
 
 from psycopg import sql
 from dotenv import load_dotenv
-from pgvector.psycopg import Vector
+from pgvector.psycopg import Vector, register_vector
 from typing import Any, Dict, List, Optional
 
 from langchain_core.documents import Document
@@ -29,6 +29,7 @@ class PgVectorStore:
         
         """
         self.connector = psycopg.connect(self.dsn, autocommit=True)
+        register_vector(self.connector)  # Register the Vector type with the connection.
 
     def close_connection(self):
         """
@@ -268,20 +269,134 @@ class PgVectorStore:
             collection: str,
     ):
         """
-        insert_chunks_grouped_by_source_skip_existing
+        Inserts chunks into the collection after first checking if the sources already exist.
+        Chunks are grouped by source to optimize checks.
         """
+        if not docs:
+            print("No documents to insert")
+            return
 
-        print(f"Preparing {len(docs)} chunks for insertion into collection '{collection}'")
+        print(f"Preparing {len(docs)} chunks for insertion into the collection '{collection}'")
 
-        texts, metadata = self.pg_utils.prepare_chunks(docs)
+        # Verify that the collection exists
+        if not self.table_exists(collection):
+            print(f"Collection '{collection}' does not exist, creating it...")
+            if not self.create_vector_collection(collection, dim=1024, index_type="hnsw"):
+                raise RuntimeError(f"Unable to create the collection '{collection}'")
 
-        print(f"Inserting {len(texts)} chunks into collection '{collection}'")
+        # Prepare the data
+        texts, metadatas, embeddings = self.pg_utils.prepare_chunks(docs)
+        
+        if not texts:
+            print("No valid text found after preparation")
+            return
 
-        for text in texts:
-            print(f"Text chunk: {text[:30]}...")
+        # Group by source
+        sources_groups = {}
+        for i, (text, metadata, embedding) in enumerate(zip(texts, metadatas, embeddings)):
+            source = metadata.get('file_name', 'unknown')
+            if source not in sources_groups:
+                sources_groups[source] = []
+            sources_groups[source].append({
+                'text': text,
+                'metadata': metadata,
+                'embedding': embedding
+            })
 
-        for meta in metadata:
-            print(f"Metadata: {meta}")
+        print(f"Grouped into {len(sources_groups)} sources: {list(sources_groups.keys())}")
+
+        # Check for existing sources
+        existing_sources = self._check_existing_sources(collection, list(sources_groups.keys()))
+        
+        # Insert only new sources
+        total_inserted = 0
+        for source, chunks in sources_groups.items():
+            if source in existing_sources:
+                print(f"Source '{source}' already exists, skipping {len(chunks)} chunks")
+                continue
+                
+            print(f"Inserting {len(chunks)} chunks for source '{source}'")
+            inserted_count = self._insert_chunks_for_source(collection, source, chunks)
+            total_inserted += inserted_count
+
+        print(f"Insertion complete: {total_inserted} chunks inserted in total")
+
+    def _check_existing_sources(self, collection: str, sources: List[str]) -> set:
+        """
+        Checks which sources already exist in the collection.
+        
+        Args:
+            collection: Name of the collection (table)
+            sources: List of sources to check
+            
+        Returns:
+            Set of sources that already exist
+        """
+        if not sources:
+            return set()
+            
+        collection = collection.lower()
+        table_identifier = sql.Identifier(collection)
+        
+        # Use ANY to check multiple sources in a single query
+        with self.connector.cursor() as cur:
+            cur.execute(
+                sql.SQL("""
+                    SELECT DISTINCT source 
+                    FROM {} 
+                    WHERE source = ANY(%s)
+                """).format(table_identifier),
+                (sources,)
+            )
+            existing = {row[0] for row in cur.fetchall()}
+            
+        if existing:
+            print(f"Existing sources found: {existing}")
+        
+        return existing
+
+    def _insert_chunks_for_source(self, collection: str, source: str, chunks: List[Dict]) -> int:
+        """
+        Inserts all chunks for a given source into the collection.
+        
+        Args:
+            collection: Name of the collection (table)
+            source: Name of the source file
+            chunks: List of chunks with text, metadata, embedding from the source file
+            
+        Returns:
+            Number of chunks inserted
+        """
+        collection = collection.lower()
+        table_identifier = sql.Identifier(collection)
+        
+        insert_query = sql.SQL("""
+            INSERT INTO {} (embedding, text, source, page, title, author, url)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """).format(table_identifier)
+        
+        inserted_count = 0
+        with self.connector.cursor() as cur:
+            for chunk in chunks:
+                try:
+                    metadata = chunk['metadata']
+                    embedding_vector = Vector(chunk['embedding'])
+                    text = chunk['text']
+
+                    cur.execute(insert_query, (
+                        embedding_vector,
+                        text,
+                        source,
+                        metadata.get('page', 0),
+                        metadata.get('title'),
+                        metadata.get('author'),
+                        metadata.get('url')
+                    ))
+                    inserted_count += 1
+                except Exception as e:
+                    print(f"Error while inserting a chunk for '{source}': {e}")
+                    continue
+            return inserted_count
 
     def read_embeddings(self, 
                         table: str, # Name of the collection (table).

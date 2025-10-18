@@ -49,7 +49,7 @@ class PgVectorUtils:
     def prepare_chunks(
             self,
             docs: List[Any],
-    ) -> Tuple[List[str], List[str], List[Optional[int]], List[List[float]]]:
+    ) -> Tuple[List[str], List[Dict[str, Any]], List[List[float]]]:
         
         texts: List[str] = []
         metadatas: List[Dict[str, Any]] = []
@@ -71,7 +71,6 @@ class PgVectorUtils:
 
             texts.append(text)
             metadatas.append(meta)
-        # embeddings: List[List[float]] = self.embed_func(texts) if texts else []
         print(f"Computing embeddings for {len(texts)} texts")
 
         embeddings: List[List[float]] = self.embed(texts) if texts else []
@@ -79,4 +78,4 @@ class PgVectorUtils:
         if embeddings:
             print(f"Got embeddings: {len(embeddings)} vectors of size {len(embeddings[0])}")
 
-        return texts, metadatas  # , embeddings
+        return texts, metadatas, embeddings
