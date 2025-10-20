@@ -9,7 +9,7 @@ from urllib3.util.retry import Retry
 logger = logging.getLogger(__name__)
 
 class PgVectorUtils:
-    def __init__(self, embed_endpoint="http://api:8000/api/v1/ingest/embed"):
+    def __init__(self, embed_endpoint="http://localhost:8000/api/v1/ingest/embed"):
         self.embed_endpoint = embed_endpoint
         
 

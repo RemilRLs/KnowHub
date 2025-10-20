@@ -401,27 +401,64 @@ class PgVectorStore:
     def read_embeddings(self, 
                         table: str, # Name of the collection (table).
                         prompt: str, # Prompt to be embedded.
-                        embed_func, # To be replaced by the embedder function (vLLM CortAIx) - Name of the function to use : embed_query(self, text:str) -> List[float]
                         k: int = 16, # Number of nearest chunks to return
-                        ef_search: Optional[int] = 150 # HNSW : Number of candidates considered during search (improves accuracy)
+                        ef_search: Optional[int] = 150, # HNSW : Number of candidates considered during search (improves accuracy)
+                        sources: Optional[List[str]] = None,
+                        threshold: Optional[float] = None # Maximum distance threshold (filters out results with distance > threshold)
                         ):
         """
+        Retrieves the k nearest embeddings to the given prompt from the specified table.
         
+        Args:
+            table (str): Name of the collection (table).
+            prompt (str): Prompt to be embedded.
+            embed_func: Embedding function to use.
+            k (int): Number of nearest chunks to return.
+            ef_search (Optional[int]): HNSW ef_search parameter.
+            sources (Optional[List[str]]): Optional list of sources to filter by.
+            threshold (Optional[float]): Maximum distance threshold. Results with distance > threshold are excluded.
+        
+        Returns:
+            List[Dict[str, Any]]: List of dictionaries containing the retrieved rows with their distances.
         """
 
         table_identifier = sql.Identifier(table.lower())
 
-        qvec = Vector(embed_func(prompt))
+        qvec = Vector(self.pg_utils.embed([prompt])[0])
         select_sql = sql.SQL("id, text, source, page, skillsets, title, author, url, creation_date, embedding <-> %s AS distance")
 
-
-        # ORDY BY embedding <-> %s : To get the nearest neighbors based on cosine distance (most similar vectors first).
-        query = sql.SQL("""
-            SELECT {cols}
-            FROM {table}
-            ORDER BY embedding <-> %s 
-            LIMIT %s
-        """).format(cols=select_sql, table=table_identifier)
+        # Build query with optional WHERE clause for sources and threshold
+        where_clauses = []
+        if sources is not None and len(sources) > 0:
+            where_clauses.append(sql.SQL("source = ANY(%s)"))
+        if threshold is not None:
+            where_clauses.append(sql.SQL("embedding <-> %s <= %s")) # First %s is query vector, second is threshold
+        
+        if where_clauses:
+            where_sql = sql.SQL(" AND ").join(where_clauses)
+            query = sql.SQL("""
+                SELECT {cols}
+                FROM {table}
+                WHERE {where}
+                ORDER BY embedding <-> %s 
+                LIMIT %s
+            """).format(cols=select_sql, table=table_identifier, where=where_sql)
+            
+            query_params = [qvec] # User query and other parameters
+            if sources is not None and len(sources) > 0:
+                query_params.append(sources)
+            if threshold is not None:
+                query_params.extend([qvec, threshold])
+            query_params.extend([qvec, k])
+            query_params = tuple(query_params)
+        else: # Nearest neighbor search without filtering (no WHERE clause)
+            query = sql.SQL("""
+                SELECT {cols}
+                FROM {table}
+                ORDER BY embedding <-> %s 
+                LIMIT %s
+            """).format(cols=select_sql, table=table_identifier)
+            query_params = (qvec, qvec, k)
 
         results: List[Dict[str, Any]] = []
 
@@ -429,30 +466,194 @@ class PgVectorStore:
             if ef_search is not None:
                 cur.execute(sql.SQL("SET hnsw.ef_search = {}").format(sql.Literal(int(ef_search))))
             
-            cur.execute(query, (qvec, qvec, k))
-            rows = cur.fetchall() # Get all results.
-            colnames = [desc.name for desc in cur.description] # I get all column names such as ['id', 'text', 'source', 'page', 'distance', ...]
+            cur.execute(query, query_params)
+            rows = cur.fetchall()
+            colnames = [desc.name for desc in cur.description]
             for row in rows:
-                rec = dict(zip(colnames, row)) # Create a dictionary for each row.
+                rec = dict(zip(colnames, row))
                 if rec.get("distance") is not None:
-                    rec["distance"] = float(rec["distance"]) # Convert distance to float.
+                    rec["distance"] = float(rec["distance"])
+                results.append(rec)
+        
+        return results 
+    
+    def read_hybrid(self,
+                    table: str,
+                    prompt: str,
+                    embed_func,
+                    k: int = 16,
+                    ef_search: Optional[int] = 150,
+                    rrf_k: int = 60,
+                    top_k: Optional[int] = None
+                    ) -> List[Dict[str, Any]]:
+        """
+        Performs hybrid search combining vector similarity and full-text search using 
+        Reciprocal Rank Fusion (RRF).
+        
+        Args:
+            table (str): Name of the collection (table).
+            prompt (str): Search query text.
+            embed_func: Function to embed the prompt into a vector.
+            k (int): Number of results to retrieve from each method.
+            ef_search (Optional[int]): HNSW ef_search parameter.
+            rrf_k (int): RRF constant (typically 60). Higher values give more weight to lower ranks.
+            top_k (Optional[int]): Number of final results to return after RRF. If None, returns k results.
+            
+        Returns:
+            List[Dict[str, Any]]: List of deduplicated and re-ranked results with RRF scores.
+        """
+        # Get results from both methods
+        vector_results = self.read_embeddings(table, prompt, embed_func, k, ef_search) 
+        fts_results = self.read_fts(table, prompt, k)
+        
+        # RRF scoring: score = sum(1 / (rank + k)) for each retrieval method
+        rrf_scores: Dict[int, float] = {}
+        doc_data: Dict[int, Dict[str, Any]] = {}
+        
+        # Process vector search results
+        for rank, doc in enumerate(vector_results, start=1):
+            doc_id = doc["id"] # ID is the primary key of the table
+            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (rrf_k + rank)) # Either initialize or add to the score (can sum up)
+            if doc_id not in doc_data:
+                doc_data[doc_id] = doc.copy() # All fields of the document
+                doc_data[doc_id]["vector_rank"] = rank # Is rank of the document in vector search
+                doc_data[doc_id]["fts_rank"] = None
+        
+        # Process FTS results
+        for rank, doc in enumerate(fts_results, start=1):
+            doc_id = doc["id"] # ID is the primary key of the table
+            rrf_scores[doc_id] = rrf_scores.get(doc_id, 0.0) + (1.0 / (rrf_k + rank))
+            if doc_id not in doc_data:
+                doc_data[doc_id] = doc.copy()
+                doc_data[doc_id]["vector_rank"] = None
+                doc_data[doc_id]["fts_rank"] = rank
+            else:
+                doc_data[doc_id]["fts_rank"] = rank
+        
+        # Sort by RRF score and add to results
+        sorted_doc_ids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)
+        
+        # Use top_k if specified, otherwise use k
+        final_k = top_k if top_k is not None else k
+        
+        results = []
+        for doc_id in sorted_doc_ids[:final_k]:
+            doc = doc_data[doc_id]
+            doc["rrf_score"] = rrf_scores[doc_id]
+            results.append(doc)
+        
+        return results
+
+    def read_fts(self, 
+                 table: str, # Name of the collection (table).
+                 prompt: str, # Prompt to be embedded.
+                 k: int = 16 # Number of nearest chunks to return
+                ) -> List[Dict[str, Any]]:
+        """
+        Implementation of Full-Text Search with improved ranking.
+        Uses ts_rank with normalization and considers both exact matches and proximity.
+        """
+        
+        query = sql.SQL("""
+            WITH q AS (
+                SELECT
+                    websearch_to_tsquery('english', %(q)s) AS q_en,
+                    websearch_to_tsquery('french',  %(q)s) AS q_fr,
+                    plainto_tsquery('english', %(q)s) AS q_plain_en,
+                    plainto_tsquery('french',  %(q)s) AS q_plain_fr
+            )
+            SELECT
+                id, text, source, page, creation_date, title, author, url,
+                GREATEST(
+                    -- Use ts_rank with document length normalization (flag 1)
+                    -- Higher weight for exact phrase matches
+                    COALESCE(
+                        ts_rank(ts_vector_en, q.q_en, 1) * 2.0 +
+                        ts_rank(ts_vector_en, q.q_plain_en, 1),
+                        0
+                    ),
+                    COALESCE(
+                        ts_rank(ts_vector_fr, q.q_fr, 1) * 2.0 +
+                        ts_rank(ts_vector_fr, q.q_plain_fr, 1),
+                        0
+                    )
+                ) AS fts_rank
+            FROM {table}, q
+            WHERE (ts_vector_en @@ q.q_en OR ts_vector_en @@ q.q_plain_en) 
+               OR (ts_vector_fr @@ q.q_fr OR ts_vector_fr @@ q.q_plain_fr)
+            ORDER BY fts_rank DESC NULLS LAST
+            LIMIT %(k)s;
+        """).format(table=sql.Identifier(table.lower()))
+
+        results: List[Dict[str, Any]] = []
+
+        with self.connector.cursor() as cur:
+            cur.execute(query, {"q": prompt, "k": k})
+            rows = cur.fetchall()
+            colnames = [desc.name for desc in cur.description]
+            for row in rows:
+                rec = dict(zip(colnames, row))
+                if rec.get("fts_rank") is not None:
+                    rec["fts_rank"] = float(rec["fts_rank"])
                 results.append(rec)
 
-    def read_fts(self):
-        pass
+        return results
 
 if __name__ == "__main__":
     load_dotenv()
+    print("\n--- Initializing PgVectorStore ---")
     dsn = f"postgresql://{os.getenv('POSTGRES_USER')}:{os.getenv('POSTGRES_PASSWORD')}@localhost:5433/{os.getenv('POSTGRES_DB')}"
     pgvector_store = PgVectorStore(dsn)
 
     # pgvector_store.drop_table("my_collection")
+    print("\n--- Testing create_vector_collection ---")
 
     if(pgvector_store.create_vector_collection("my_collection", dim=1024, index_type="hnsw")):
         print("Collection created successfully.")
     else:
         print("Collection already exists or an error occurred.")
 
-    # Closing
+    # Test read_embeddings
+    print("\n--- Testing read_embeddings ---")
+    prompt = "La Global Business Unit Cybersecurity & Digital Identity (CDI) de Thales regroupe plusieurs activités..."
 
+    print(f"Query prompt: '{prompt}'")
+    
+    results = pgvector_store.read_embeddings(
+        table="string",
+        prompt=prompt,
+        k=5,
+        ef_search=150
+    )
+    
+    print(f"\nFound {len(results)} results:")
+    for i, result in enumerate(results, 1):
+        print(f"\nResult {i}:")
+        print(f"  ID: {result.get('id')}")
+        print(f"  Text: {result.get('text', '')[:100]}...")  # First 100 chars
+        print(f"  Source: {result.get('source')}")
+        print(f"  Page: {result.get('page')}")
+        print(f"  Distance: {result.get('distance'):.4f}")
+
+    # Test read_fts
+    print("\n--- Testing read_fts ---")
+    fts_prompt = "Global Business Unit"
+    print(f"FTS query: '{fts_prompt}'")
+    
+    fts_results = pgvector_store.read_fts(
+        table="string",
+        prompt=fts_prompt,
+        k=5
+    )
+    
+    print(f"\nFound {len(fts_results)} FTS results:")
+    for i, result in enumerate(fts_results, 1):
+        print(f"\nResult {i}:")
+        print(f"  ID: {result.get('id')}")
+        print(f"  Text: {result.get('text', '')}")
+        print(f"  Source: {result.get('source')}")
+        print(f"  Page: {result.get('page')}")
+        print(f"  FTS Rank: {result.get('fts_rank'):.4f}")
+
+    # Closing
     pgvector_store.close_connection()

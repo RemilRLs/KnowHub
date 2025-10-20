@@ -176,11 +176,59 @@ def extract_tables_from_pdf(
     flavor: str = "lattice",
     pages: str = "all",
     min_accuracy: float = 80.0,
-) -> List[Document]:
+) -> tuple[List[Document], Dict[int, List[tuple]]]:
     """
+    Extract tables and their bounding boxes from a PDF in a single pass.
+    Returns (table_documents, bboxes_by_page)
     """
     extractor = PDFTableExtractor(flavor=flavor)
-    return extractor.extract_tables(pdf_path, pages=pages, min_accuracy=min_accuracy)
+    
+    if not pdf_path.exists():
+        logger.warning(f"PDF not found: {pdf_path}")
+        return [], {}
+    
+    try:
+        kwargs = {
+            "flavor": flavor,
+            "pages": pages,
+        }
+        
+        tables = camelot.read_pdf(str(pdf_path), **kwargs)
+        logger.info(f"Found {len(tables)} table(s) in {pdf_path.name}")
+        
+        documents = []
+        bboxes_by_page = {}
+        
+        for idx, table in enumerate(tables):
+            accuracy = table.parsing_report.get("accuracy", 0.0)
+            if accuracy < min_accuracy:
+                logger.warning(
+                    f"Table {idx+1} on page {table.page} ignored "
+                    f"(accuracy={accuracy:.1f}% < {min_accuracy}%)"
+                )
+                continue
+            
+            # Extract table document
+            doc = extractor._table_to_document(
+                table=table,
+                table_index=idx,
+                pdf_path=pdf_path,
+            )
+            documents.append(doc)
+            
+            # Extract bounding box
+            page_num = table.page
+            if page_num not in bboxes_by_page:
+                bboxes_by_page[page_num] = []
+            bbox = table._bbox
+            bboxes_by_page[page_num].append(bbox)
+        
+        logger.info(f"Extracted {len(documents)} valid table(s) from {pdf_path.name}")
+        return documents, bboxes_by_page
+        
+    except Exception as e:
+        logger.error(f"Error extracting tables from {pdf_path.name}: {e}")
+        return [], {}
 
 if __name__ == "__main__":
     # Test avec un PDF contenant une table
@@ -191,7 +239,7 @@ if __name__ == "__main__":
         print(f"Test d'extraction de tables depuis: {pdf_path}")
         print("=" * 60)
         
-        print("\n1. Test avec flavor='lattice' (bordures visibles)")
+        print("\n1. Test avec flavor='lattice' (flavor='lattice')")
         print("-" * 60)
         extractor_lattice = PDFTableExtractor(flavor="lattice")
         docs_lattice = extractor_lattice.extract_tables(pdf_path, min_accuracy=70.0)
@@ -204,7 +252,7 @@ if __name__ == "__main__":
             print(f"\nContenu:\n{doc.page_content}\n")
         
         # Tester avec flavor 'stream' (pour les tables sans bordures)
-        print("\n2. Test avec flavor='stream' (sans bordures)")
+        print("\n2. Test avec flavor='stream' (flavor='stream')")
         print("-" * 60)
         extractor_stream = PDFTableExtractor(flavor="stream")
         docs_stream = extractor_stream.extract_tables(pdf_path, min_accuracy=70.0)

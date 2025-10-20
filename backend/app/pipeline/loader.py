@@ -3,16 +3,15 @@ import pdfplumber
 
 
 from app.core.hash_utils import compute_sha256
-from app.pipeline.pdf_table_extractor import extract_tables_from_pdf, get_table_bboxes
+from app.pipeline.pdf_table_extractor import extract_tables_from_pdf
+from app.pipeline.docx_table_extractor import DocxTableExtractor
 
 from pathlib import Path
 from typing import List, Optional, Dict
 from langchain_core.documents import Document
 from langchain_community.document_loaders import (
     PDFPlumberLoader,
-    UnstructuredWordDocumentLoader,
     UnstructuredPowerPointLoader,
-    UnstructuredMarkdownLoader,
     TextLoader,
 )
 
@@ -20,10 +19,10 @@ logger = logging.getLogger(__name__)
 
 LOADER_MAPPING = {
     ".pdf": PDFPlumberLoader,
-    ".docx": UnstructuredWordDocumentLoader,
     ".pptx": UnstructuredPowerPointLoader,
     ".txt": TextLoader,
     ".md": TextLoader,
+    ".docx": None,  # Géré par DocxTableExtractor
 }
 
 
@@ -60,14 +59,22 @@ class DocumentLoader:
 
         return ext
     
-    def _load_one(self, file_path: Path) -> List[Document]:
-        """Load a single file with the proper loader."""
+    def _load_one(self, file_path: Path) -> tuple[List[Document], List[Document]]:
+        """
+        Load a single file with the proper loader.
+        Returns (text_docs, table_docs)
+        """
         p = Path(file_path).resolve()
         ext = self._validate_file(p)
         
         # For PDFs, if table extraction is enabled, use the special loader
         if ext == ".pdf" and self.extract_pdf_tables:
             return self._load_pdf_with_table_exclusion(p)
+        
+        # For DOCX, use custom extractor
+        if ext == ".docx":
+            extractor = DocxTableExtractor()
+            return extractor._load_docx_with_table_exclusion(p)
         
         loader_cls = LOADER_MAPPING[ext]
         loader = loader_cls(str(p))
@@ -77,16 +84,18 @@ class DocumentLoader:
             for d in docs:
                 d.metadata["page"] = d.metadata.get("page", 0) + 1
         
-        return docs
+        return docs, []
     
-    def _load_pdf_with_table_exclusion(self, file_path: Path) -> List[Document]:
+    def _load_pdf_with_table_exclusion(self, file_path: Path) -> tuple[List[Document], List[Document]]:
         """
-        We load a PDF while excluding table areas to avoid duplication with table extraction from Camelot.
+        Load a PDF while excluding table areas to avoid duplication.
+        Returns (text_docs, table_docs)
         """
-        # I get first the table bounding boxes from Camelot
-        table_bboxes = get_table_bboxes(
+        # Extract tables and bboxes in a single pass
+        table_docs, table_bboxes = extract_tables_from_pdf(
             pdf_path=file_path,
             flavor=self.table_extraction_flavor,
+            pages="all",
             min_accuracy=self.min_table_accuracy,
         )
         
@@ -100,7 +109,6 @@ class DocumentLoader:
                     
                     if page_table_bboxes:
                         # Extract text outside of table areas
-                        # So here I only extract text that is not in table areas
                         text = self._extract_text_excluding_tables(page, page_table_bboxes)
                     else:
                         # No tables, extract all text
@@ -119,15 +127,14 @@ class DocumentLoader:
         
         except Exception as e:
             logger.error(f"Error loading PDF {file_path.name} with table exclusion: {e}")
-
             # Fallback on standard loader
             loader = PDFPlumberLoader(str(file_path))
             docs = loader.load()
             for d in docs:
                 d.metadata["page"] = d.metadata.get("page", 0) + 1
         
-        return docs
-    
+        return docs, table_docs
+
     def _extract_text_excluding_tables(self, page, table_bboxes: List[tuple]) -> str:
         """
         Extract text from a PDF page excluding specified table bounding boxes (by overlap).
@@ -182,53 +189,36 @@ class DocumentLoader:
     
     def _extract_pdf_tables(self, file_path: Path) -> List[Document]:
         """
-        Extract tables from a PDF as separate documents.
+        DEPRECATED: Now handled in _load_pdf_with_table_exclusion
         """
-        try:
-            tables = extract_tables_from_pdf(
-                pdf_path=file_path,
-                flavor=self.table_extraction_flavor,
-                pages="all",
-                min_accuracy=self.min_table_accuracy,
-            )
-            
-            if tables:
-                logger.info(f"Extracted {len(tables)} table(s) from {file_path.name}")
-            
-            return tables
-            
-        except ImportError:
-            logger.warning(
-                "Camelot not installed, table extraction disabled. "
-                "Install with: pip install camelot-py[cv]"
-            )
-            return []
-        except Exception as e:
-            logger.error(f"Error extracting tables from {file_path.name}: {e}")
-            return []
+        # This method is no longer needed but kept for backward compatibility
+        table_docs, _ = extract_tables_from_pdf(
+            pdf_path=file_path,
+            flavor=self.table_extraction_flavor,
+            pages="all",
+            min_accuracy=self.min_table_accuracy,
+        )
+        return table_docs
 
     def load_documents(self, file_paths: List[Path]) -> List[Document]:
         """
         Load documents from the given file paths.
         """
-
         all_docs: List[Document] = []
 
         for file_path in file_paths:
             try:
                 p = Path(file_path)
-                docs = self._load_one(p)
+                docs, table_docs = self._load_one(p)
+                
                 if not isinstance(docs, list):
                     logger.warning("Loader for %s returned %r, coercing to []", p, type(docs))
                     docs = []
 
                 logger.info("Loaded %d document(s) from %s", len(docs), p)
                 
-                table_docs = []
-                if p.suffix.lower() == ".pdf" and self.extract_pdf_tables:
-                    table_docs = self._extract_pdf_tables(p)
-                    if table_docs:
-                        logger.info(f"Extracted {len(table_docs)} table(s) from {p.name}")
+                if table_docs:
+                    logger.info(f"Extracted {len(table_docs)} table(s) from {p.name}")
 
                 file_hash = compute_sha256(p)
 
