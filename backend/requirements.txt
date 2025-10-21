@@ -14,7 +14,7 @@ unstructured
 python-docx
 markdown
 pgvector
-psycopg[binary]
+psycopg[binary, pool]
 camelot-py[cv]
 tabulate
 pdfplumber

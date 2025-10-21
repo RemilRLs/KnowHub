@@ -7,7 +7,7 @@ from app.pipeline.loader import DocumentLoader
 from app.pipeline.normalize import DocumentNormalizer
 from app.pipeline.splitter import DocumentSplitter
 
-from app.core.pgvector import PgVectorStore
+from app.core.pgvector.pgvector import PgVectorStore
 from app.config.config import PGVECTOR_DSN
 
 logger = logging.getLogger(__name__)

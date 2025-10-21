@@ -9,7 +9,8 @@ from typing import Any, Dict, List, Optional
 from langchain_core.documents import Document
 
 
-from app.core.pgvector_utils import PgVectorUtils
+from app.core.pgvector.pgvector_utils import PgVectorUtils
+from app.core.pgvector.pgpool_connector import PgPoolConnector
 
 class PgVectorStore:
     """
@@ -19,31 +20,11 @@ class PgVectorStore:
     def __init__(self, dsn: str, schema: str = "public"):
         self.dsn = dsn
         self.schema = schema
+
+        self.pg_pool = PgPoolConnector(dsn)
+        self.pg_pool.connect()
+
         self.pg_utils = PgVectorUtils()
-    
-        self.connection_db()
-
-
-    def connection_db(self):
-        """
-        
-        """
-        self.connector = psycopg.connect(self.dsn, autocommit=True)
-        register_vector(self.connector)  # Register the Vector type with the connection.
-
-    def close_connection(self):
-        """
-        
-        """
-        if self.connector:
-            self.connector.close()
-
-    def check_if_connected(self) -> bool:
-        """
-        
-        """
-        pass 
-
 
   
     def table_exists(self, table_name: str) -> bool:
@@ -54,7 +35,7 @@ class PgVectorStore:
         Returns:
             bool: True if the table exists, False otherwise.
         """
-        with self.connector.cursor() as cur:
+        with self.pg_pool.cursor() as cur:
             cur.execute("""
                 SELECT EXISTS (
                     SELECT 1
@@ -76,7 +57,7 @@ class PgVectorStore:
         Raises:
             psycopg.Error: If there is an error connecting to the database or executing the SQL command.
         """
-        with self.connector.cursor() as cur:
+        with self.pg_pool.cursor() as cur:
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
 
     def ensure_index_type(self, index_type: str) -> bool:
@@ -126,7 +107,7 @@ class PgVectorStore:
         tbl = sql.Identifier(collection_name)  # Prevent SQL injection.
         idx = sql.Identifier(f"{collection_name}_vec_idx")
 
-        with self.connector.cursor() as cur:
+        with self.pg_pool.cursor() as cur:
             cur.execute(
                 sql.SQL("""
                     CREATE TABLE IF NOT EXISTS {} (
@@ -198,7 +179,7 @@ class PgVectorStore:
         table_name = table_name.lower()
         tbl = sql.Identifier(table_name)
 
-        with self.connector.cursor() as cur:
+        with self.pg_pool.cursor() as cur:
             cur.execute(
                 sql.SQL("""
                     DROP TABLE IF EXISTS {};
@@ -212,7 +193,7 @@ class PgVectorStore:
         """
         
         """
-        with self.connector.cursor() as cur:
+        with self.pg_pool.cursor() as cur:
             cur.execute("""
                 SELECT table_name
                 FROM information_schema.tables
@@ -248,7 +229,7 @@ class PgVectorStore:
         table_name = table_name.lower()
         tbl = sql.Identifier(table_name)
 
-        with self.connector.cursor() as cur:
+        with self.pg_pool.cursor() as cur:
             cur.execute(
                 sql.SQL("""
                     DELETE FROM {} WHERE source = %s;
@@ -339,7 +320,7 @@ class PgVectorStore:
         table_identifier = sql.Identifier(collection)
         
         # Use ANY to check multiple sources in a single query
-        with self.connector.cursor() as cur:
+        with self.pg_pool.cursor() as cur:
             cur.execute(
                 sql.SQL("""
                     SELECT DISTINCT source 
@@ -376,7 +357,7 @@ class PgVectorStore:
         """).format(table_identifier)
         
         inserted_count = 0
-        with self.connector.cursor() as cur:
+        with self.pg_pool.cursor() as cur:
             for chunk in chunks:
                 try:
                     metadata = chunk['metadata']
@@ -462,7 +443,7 @@ class PgVectorStore:
 
         results: List[Dict[str, Any]] = []
 
-        with self.connector.cursor() as cur:
+        with self.pg_pool.cursor() as cur:
             if ef_search is not None:
                 cur.execute(sql.SQL("SET hnsw.ef_search = {}").format(sql.Literal(int(ef_search))))
             
@@ -550,44 +531,30 @@ class PgVectorStore:
                  k: int = 16 # Number of nearest chunks to return
                 ) -> List[Dict[str, Any]]:
         """
-        Implementation of Full-Text Search with improved ranking.
-        Uses ts_rank with normalization and considers both exact matches and proximity.
+        Implementation of Full-Text Search.
         """
         
         query = sql.SQL("""
             WITH q AS (
-                SELECT
-                    websearch_to_tsquery('english', %(q)s) AS q_en,
-                    websearch_to_tsquery('french',  %(q)s) AS q_fr,
-                    plainto_tsquery('english', %(q)s) AS q_plain_en,
-                    plainto_tsquery('french',  %(q)s) AS q_plain_fr
+            SELECT
+                websearch_to_tsquery('english', %(q)s) AS q_en,
+                websearch_to_tsquery('french',  %(q)s) AS q_fr
             )
             SELECT
-                id, text, source, page, creation_date, title, author, url,
-                GREATEST(
-                    -- Use ts_rank with document length normalization (flag 1)
-                    -- Higher weight for exact phrase matches
-                    COALESCE(
-                        ts_rank(ts_vector_en, q.q_en, 1) * 2.0 +
-                        ts_rank(ts_vector_en, q.q_plain_en, 1),
-                        0
-                    ),
-                    COALESCE(
-                        ts_rank(ts_vector_fr, q.q_fr, 1) * 2.0 +
-                        ts_rank(ts_vector_fr, q.q_plain_fr, 1),
-                        0
-                    )
-                ) AS fts_rank
+            id, text, source, page, creation_date, title, author, url,
+            GREATEST(
+                COALESCE(ts_rank_cd(ts_vector_en, q.q_en), 0),
+                COALESCE(ts_rank_cd(ts_vector_fr, q.q_fr), 0)
+            ) AS fts_rank
             FROM {table}, q
-            WHERE (ts_vector_en @@ q.q_en OR ts_vector_en @@ q.q_plain_en) 
-               OR (ts_vector_fr @@ q.q_fr OR ts_vector_fr @@ q.q_plain_fr)
+            WHERE (ts_vector_en @@ q.q_en) OR (ts_vector_fr @@ q.q_fr)
             ORDER BY fts_rank DESC NULLS LAST
             LIMIT %(k)s;
         """).format(table=sql.Identifier(table.lower()))
 
         results: List[Dict[str, Any]] = []
 
-        with self.connector.cursor() as cur:
+        with self.pg_pool.cursor() as cur:
             cur.execute(query, {"q": prompt, "k": k})
             rows = cur.fetchall()
             colnames = [desc.name for desc in cur.description]
