@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
 from app.api.v1.router import api_router
-from app.core.logging import init_logging
+from app.core.logging_utils import init_logging
 
 app = FastAPI(title="KnowHub API", version="0.1.0")
 

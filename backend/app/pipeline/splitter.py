@@ -95,6 +95,20 @@ class DocumentSplitter:
             # PPTX splitter (1 slide = 1 chunk)
             meta = dict(d.metadata or {})
             ext = meta.get("ext", "").lower()
+            content_type = meta.get("content_type", "text")
+            
+            # Don't split tables, they are already optimized
+            if content_type == "table":
+                text = d.page_content or ""
+                if len(text) >= self.min_chunk_chars:
+                    meta.update({
+                        "chunk_id": str(uuid.uuid4()),
+                        "chunk_index": 0,
+                        "splitter_version": "table-v1",
+                        "chunk_chars": len(text),
+                    })
+                    out.append(Document(page_content=text, metadata=meta))
+                continue
 
             if ext == ".pptx":
                 text = d.page_content or ""

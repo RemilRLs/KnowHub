@@ -3,23 +3,26 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.backend 
-    container_name: backend-knowhub-dev
     command: >
-      uvicorn app.main:app --host 0.0.0.0 --port 8000
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
       --reload --reload-dir /app/app
+      
     ports:
       - "8000:8000" 
+    environment:
+      - HF_HOME=/home/appuser/.cache/huggingface
     volumes:
       - ./backend/app:/app/app:rw
       - ./backend/logs:/app/logs:rw
+      - hf-cache:/home/appuser/.cache/huggingface
     env_file:
       - ./backend/.env
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8000/api/v1/health/healthz || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 10s 
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s 
     depends_on:
       redis:
         condition: service_healthy
@@ -34,18 +37,22 @@ services:
       context: ./backend
       dockerfile: Dockerfile.backend
     container_name: worker-knowhub-dev
-    command: bash -lc 'python -m watchfiles --filter python "dramatiq app.tasks --processes 2 --threads 4"'
+    command: bash -lc 'sleep 15 && dramatiq app.tasks --processes 1 --threads 1'
     env_file:
       - ./backend/.env
     volumes:
       - ./backend/app:/app/app:rw
     depends_on:
+      api:
+        condition: service_healthy
       redis:
         condition: service_healthy
       minio:
         condition: service_healthy
+      vectordb:
+        condition: service_healthy
     restart: unless-stopped
-    stop_grace_period: 1m
+    stop_grace_period: 30s
     networks:
       - appnet
 
@@ -91,10 +98,31 @@ services:
     restart: unless-stopped
     networks:
       - appnet
+  vectordb:
+    image: pgvector/pgvector:pg17-bookworm 
+    container_name: pgvector-db
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - appnet
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -h 127.0.0.1 -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
 volumes:
   redis-data:
   minio-data:
+  hf-cache:
+  pgdata:
 
 networks:
   appnet:
