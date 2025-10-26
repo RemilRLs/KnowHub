@@ -34,7 +34,9 @@ class DocumentNormalizer:
             docs: Iterable[Document],
     ) -> List[Document]:
         """
-        Normalize a list of documents.
+        Normalize a list of documents
+        - Clean text (whitespace, dehyphenation, unicode normalization)
+        - Add ingestion metadata (ingested_at, file_name, ext)
         """
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         out: List[Document] = [] 
@@ -42,19 +44,21 @@ class DocumentNormalizer:
         for d in docs:
             meta = dict(d.metadata) if d.metadata else {}
             src = meta.get("source")
-            file_name = self._extract_filename(src) if src else "unknown"
-            ext = Path(src).suffix if src else ""
+            
+            if "file_name" not in meta:
+                file_name = self._extract_filename(src) if src else "unknown"
+                meta["file_name"] = file_name
+            
+            if "ext" not in meta:
+                ext = Path(src).suffix if src else ""
+                meta["ext"] = ext.lower()
 
             content = self._clean_text(d.page_content)
 
             if not content:
                 continue
 
-            meta.update({
-                "ingested_at": now,
-                "ext": ext.lower(),
-                "file_name": file_name,
-            })
+            meta["ingested_at"] = now
 
             out.append(Document(page_content=content, metadata=meta))
 

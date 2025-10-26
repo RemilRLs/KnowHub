@@ -22,6 +22,7 @@ from app.tasks.ingest import validate_and_promote
 from app.core.minio_client import MinioClient # Bucket client for MinIO/S3.
 from app.core.job_utils import build_message_for
 from app.core.settings import Settings
+# from app.core.qwen_embedder import QwenEmbedder
 
 from app.tasks import results_backend
 
@@ -29,10 +30,11 @@ from app.tasks import results_backend
 
 # Base Models.
 from app.api.v1.schemas.presign import PresignReq, PresignResp, EnqueueReq, BatchPresignResp, BatchPresignReq, EnqueueBatchReq, EnqueueBatchResp
-from app.api.v1.schemas.ingest import JobStatusReq
+from app.api.v1.schemas.ingest import JobStatusReq, EmbedRequest, EmbedResponse
 
 
 router = APIRouter()
+# embedder = QwenEmbedder()
 logger = logging.getLogger(__name__)
 
 minio_client = MinioClient()
@@ -232,5 +234,3 @@ def job_status(req: JobStatusReq = Depends()):
         return {"status": "pending"}
     except ResultTimeout:
         return {"status": "timeout"}
-
-    
