@@ -21,3 +21,4 @@ print("[Worker] Broker + Results middleware initialized")
 # Actors
 
 from .ingest import ingest_document, validate_and_promote
+from .generate import generate_answer

@@ -22,7 +22,7 @@ LOADER_MAPPING = {
     ".pptx": UnstructuredPowerPointLoader,
     ".txt": TextLoader,
     ".md": TextLoader,
-    ".docx": None,  # Géré par DocxTableExtractor
+    ".docx": None,  # Handled separately with custom extractor
 }
 
 

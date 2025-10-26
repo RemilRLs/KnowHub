@@ -1,5 +1,6 @@
 import logging
 
+from contextlib import contextmanager
 from typing import List, Dict, Any
 from pathlib import Path
 
@@ -20,6 +21,19 @@ class IngestPipeline:
         self.loader = loader
         self.dsn = dsn
 
+    @contextmanager
+    def _get_vectorstore(self):
+        """
+        Context manager to get a PgVectorStore connection
+        and free it after use.
+        """
+        store = PgVectorStore(dsn=self.dsn)
+        try:
+            yield store
+        finally:
+            store.pg_pool.disconnect() # We close the connection pool.
+
+
     def ingest(
         self,
         file_paths: List[str | Path],
@@ -31,27 +45,47 @@ class IngestPipeline:
         """
         logger.info("Ingest: loading %d file(s)", len(file_paths))
         paths = [Path(p) for p in file_paths]
+
+        # Read and load documents
         loaded_docs = self.loader.load_documents(paths)
         logger.info("Ingest: loaded %d document(s)", len(loaded_docs))
 
+        if not loaded_docs:
+            logger.warning("No documents loaded, skipping ingestion.")
+            return {
+                "doc_id": doc_id, 
+                "collection": collection,
+                "chunks_inserted": 0
+            }
+
+        # Normalize document text
         normalizer = DocumentNormalizer()
         normalized_docs = normalizer.normalize(loaded_docs)
+        logger.info("Ingest: normalized %d document(s)", len(normalized_docs))
 
+        # Split documents into smaller chunks
         splitter = DocumentSplitter()
         split_docs = splitter.split(normalized_docs)
+        logger.info("Ingest: split into %d chunk(s)", len(split_docs))
 
-        print(split_docs)
+        # Store chunks into PgVector
+        with self._get_vectorstore() as pgvector_store:
+            if not pgvector_store.table_exists(collection):
+                pgvector_store.create_vector_collection(
+                                                        collection_name=collection,
+                                                        index_type="hnsw"
+                                                    )
 
-        pgvector_store = PgVectorStore(dsn=self.dsn)
-        pgvector_store.create_vector_collection(collection, dim=1024, index_type="hnsw")
-        pgvector_store.insert_chunks(split_docs, collection)
-
-
+            pgvector_store.insert_chunks(
+                                        collection=collection, 
+                                        docs=split_docs
+                                        )
 
         return {
             "doc_id": doc_id,
             "collection": collection,
             "documents": normalized_docs,
+            "chunks_count": len(split_docs),
         }
 
 

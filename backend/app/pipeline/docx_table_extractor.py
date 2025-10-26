@@ -31,7 +31,6 @@ class DocxTableExtractor:
         if not paragraph.text.strip():
             return False
         if paragraph.style and 'TOC' in paragraph.style.name.upper():
-            print(f"Skipping TOC paragraph: {paragraph.text}")
             return True
         return False
 

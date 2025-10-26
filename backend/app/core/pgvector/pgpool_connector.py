@@ -70,8 +70,10 @@ class PgPoolConnector:
         if self._pool is None:
             self.connect()
             
-        with self._pool.connection() as conn:
-            with conn.cursor() as cur:
+        with self._pool.connection() as conn: # Already have a connection when initialize the class with connect method.
+            with conn.cursor() as cur: # At the end of the with, both cursor and connection are returned to the pool because thanks to the context managers.
+                # No need to close manually with a finally (the context manager does it).
+                # __enter__ and __exit__ methods of the connection and cursor handle that.
                 yield cur
 
     def is_connected(self) -> bool:

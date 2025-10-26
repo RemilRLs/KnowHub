@@ -1,16 +1,16 @@
-import psycopg
+import logging
 import os
 
 from psycopg import sql
 from dotenv import load_dotenv
-from pgvector.psycopg import Vector, register_vector
+from pgvector.psycopg import Vector
 from typing import Any, Dict, List, Optional
-
 from langchain_core.documents import Document
-
 
 from app.core.pgvector.pgvector_utils import PgVectorUtils
 from app.core.pgvector.pgpool_connector import PgPoolConnector
+
+logger = logging.getLogger(__name__)
 
 class PgVectorStore:
     """
@@ -68,8 +68,8 @@ class PgVectorStore:
 
     def create_vector_collection(self,
                                  collection_name: str,
-                                 dim: int,
                                  index_type: str = "hnsw",  # Hierarchical Navigable Small World Graph.
+                                 dim: int = 1024,
                                  hnsw_m: int = 32,  # Maximum connections per node in the graph (higher value increases accuracy).
                                  hnsw_ef_construction: int = 400,  # Number of candidates considered during construction (improves node selection).
                                  ivf_lists: int = 1000, # Number of clusters.
@@ -79,7 +79,6 @@ class PgVectorStore:
 
         Args:
             collection_name (str): Name of the collection (table) to create.
-            dim (int): Dimension of the vector embeddings.
             index_type (str, optional): Type of index to use ("hnsw" or "ivfflat"). Defaults to "hnsw".
             hnsw_m (int, optional): Maximum connections per node in HNSW graph. Defaults to 32.
             hnsw_ef_construction (int, optional): Number of candidates considered during HNSW construction. Defaults to 400.
@@ -93,7 +92,6 @@ class PgVectorStore:
         self.ensure_extension()
 
         # Ensure index type.
-
         if not self.ensure_index_type(index_type):
             return False
 
@@ -104,15 +102,15 @@ class PgVectorStore:
 
         collection_name = collection_name.lower()
 
-        tbl = sql.Identifier(collection_name)  # Prevent SQL injection.
+        tbl = sql.Identifier(collection_name)
         idx = sql.Identifier(f"{collection_name}_vec_idx")
 
         with self.pg_pool.cursor() as cur:
             cur.execute(
                 sql.SQL("""
-                    CREATE TABLE IF NOT EXISTS {} (
+                    CREATE TABLE IF NOT EXISTS {tbl} (
                     id BIGSERIAL PRIMARY KEY,
-                    embedding VECTOR(1024) NOT NULL,
+                    embedding VECTOR({dim}) NOT NULL,
                     text TEXT NOT NULL,
                     source VARCHAR(512) NOT NULL,
                     page INT NOT NULL,
@@ -129,7 +127,8 @@ class PgVectorStore:
                     ) STORED
                     );
                 """).format(
-                    sql.Identifier(collection_name)
+                    tbl=tbl,
+                    dim=sql.Literal(int(dim))
                 )
             )
 
@@ -141,26 +140,26 @@ class PgVectorStore:
             if index_type.lower() == "hnsw":
                 cur.execute(
                     sql.SQL("""
-                        CREATE INDEX IF NOT EXISTS {} ON {}
+                        CREATE INDEX IF NOT EXISTS {idx} ON {tbl}
                         USING hnsw (embedding vector_cosine_ops)
-                        WITH (m = {}, ef_construction = {});
+                        WITH (m = {m}, ef_construction = {ef});
                     """).format(
-                        idx,
-                        tbl,
-                        sql.Literal(hnsw_m),
-                        sql.Literal(hnsw_ef_construction),
+                        idx=idx,
+                        tbl=tbl,
+                        m=sql.Literal(hnsw_m),
+                        ef=sql.Literal(hnsw_ef_construction),
                     )
                 )
-            elif index_type.lower() == "ivfflat": # IVFFlat : Inverted File with Flat Compression
+            elif index_type.lower() == "ivfflat":
                 cur.execute(
                     sql.SQL("""
-                        CREATE INDEX IF NOT EXISTS {} ON {}
+                        CREATE INDEX IF NOT EXISTS {idx} ON {tbl}
                         USING ivfflat (embedding vector_cosine_ops)
-                        WITH (lists = {})
+                        WITH (lists = {lists})
                     """).format(
-                        idx,
-                        tbl,
-                        sql.Literal(ivf_lists)
+                        idx=idx,
+                        tbl=tbl,
+                        lists=sql.Literal(ivf_lists)
                     )
                 )
             else:
@@ -246,16 +245,17 @@ class PgVectorStore:
 
     def insert_chunks(
             self,
-            docs: List[Document],
             collection: str,
-    ):
+            docs: List[Document],
+            batch_size: int = 10,
+    ) -> int:
         """
         Inserts chunks into the collection after first checking if the sources already exist.
         Chunks are grouped by source to optimize checks.
         """
         if not docs:
             print("No documents to insert")
-            return
+            return 0
 
         print(f"Preparing {len(docs)} chunks for insertion into the collection '{collection}'")
 
@@ -270,7 +270,7 @@ class PgVectorStore:
         
         if not texts:
             print("No valid text found after preparation")
-            return
+            return 0
 
         # Group by source
         sources_groups = {}
@@ -278,6 +278,7 @@ class PgVectorStore:
             source = metadata.get('file_name', 'unknown')
             if source not in sources_groups:
                 sources_groups[source] = []
+            
             sources_groups[source].append({
                 'text': text,
                 'metadata': metadata,
@@ -289,18 +290,24 @@ class PgVectorStore:
         # Check for existing sources
         existing_sources = self._check_existing_sources(collection, list(sources_groups.keys()))
         
-        # Insert only new sources
+        # Insert only new sources + in batch
         total_inserted = 0
         for source, chunks in sources_groups.items():
             if source in existing_sources:
                 print(f"Source '{source}' already exists, skipping {len(chunks)} chunks")
                 continue
-                
-            print(f"Inserting {len(chunks)} chunks for source '{source}'")
-            inserted_count = self._insert_chunks_for_source(collection, source, chunks)
-            total_inserted += inserted_count
+
+            for i in range(0, len(chunks), batch_size):
+                batch_chunks = chunks[i:i + batch_size]
+                print(f"Inserting batch of {len(batch_chunks)} chunks for source '{source}'")
+                try:
+                    total_inserted += self._insert_chunks_for_source(collection, source, batch_chunks)
+                except Exception as e:
+                    print(f"Error inserting chunks for source '{source}': {e}")
+                    continue
 
         print(f"Insertion complete: {total_inserted} chunks inserted in total")
+        return total_inserted
 
     def _check_existing_sources(self, collection: str, sources: List[str]) -> set:
         """
