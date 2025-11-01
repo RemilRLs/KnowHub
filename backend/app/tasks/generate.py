@@ -9,10 +9,68 @@ from dramatiq.results.backends import RedisBackend
 from app.core.pgvector.pgvector import PgVectorStore
 from app.config.config import PGVECTOR_DSN
 from app.core.redis_config import redis_client
+from app.core.generator.llmprovider import LLMFactory
+from app.core.promptbuilder import PromptBuilder, PromptType
+from app.config.llm_settings import llm_settings
 
 logger = logging.getLogger(__name__)
 
 results_backend = RedisBackend(client=redis_client)
+
+def _build_context(chunks: List[Dict[str, Any]]) -> str:
+    """
+    Builds context from retrieved chunks.
+    """
+    context_parts = []
+    
+    for i, chunk in enumerate(chunks, 1):
+        text = chunk.get('text', '')
+        source = chunk.get('source', 'Unknown')
+        page = chunk.get('page', 'N/A')
+        distance = chunk.get('distance', 0.0)
+        
+        context_parts.append(
+            f"[Document {i} - {source} (page {page}) - distance: {distance:.3f}]\n{text}\n"
+        )
+    
+    return "\n---\n".join(context_parts)
+
+def _generate_with_llm(
+        query: str,
+        context: str,
+        max_tokens: int = 2048,
+        temperature: float = 0.5
+) -> str:
+    """
+    Generating answer using context with LLM.
+    """
+
+    prompt_builder = PromptBuilder(PromptType.RAG_GENERATION)
+    messages = prompt_builder.add_variables(
+        query=query,
+        context=context
+    ).build_messages()
+
+
+
+    try:
+        # Creation of the correct class link to the provider.
+
+        llm = LLMFactory.create(
+            provider=llm_settings.LLM_PROVIDER,
+            model=llm_settings.LLM_MODEL,
+            temperature=temperature,
+            api_key=llm_settings.OPENAI_API_KEY if llm_settings.LLM_PROVIDER == "openai" else llm_settings.ANTHROPIC_API_KEY,
+        )
+
+        # Now we have an instance of the choosen provider (by the user).
+        answer = llm.generate_chat(messages=messages)
+        
+        return answer
+    
+    except Exception as e:
+        logger.error(f"LLM generation error: {str(e)}", exc_info=True)
+        return f"Erreur lors de la génération de la réponse: {str(e)}"
 
 @dramatiq.actor(
     store_results=True, 
@@ -90,6 +148,32 @@ def generate_answer(
                     "generation_time_ms": 0,
                     "total_time_ms": (time.time() - start_time) * 1000
                 }
+            
+            # Step2: Generate answer with context from retrieved chunks
+            logger.info("Step 2/2: Generating answer with LLM")
+            generation_start = time.time()
+
+            # We build the context from the retrieved chunks
+            context = _build_context(retrieved_chunks)
+
+            answer = _generate_with_llm(
+                query=query,
+                context=context,
+                temperature=temperature
+            )
+
+            generation_time = (time.time() - generation_start) * 1000
+            total_time = (time.time() - start_time) * 1000
+
+            logger.info(f"Answer : {answer}")
+
+            return {
+                "status": "sucess",
+                "query": query,
+                "answer": answer,
+                "sources": [chunk.get('source', 'Unknown') for chunk in retrieved_chunks],
+                "retrieved_chunks": len(retrieved_chunks),
+            }
 
         finally:
             store.pg_pool.disconnect() # Close the session pool
