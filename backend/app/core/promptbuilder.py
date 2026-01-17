@@ -28,12 +28,12 @@ class PromptBuilder:
 
     # Mapping of PromptType to PromptTemplate
     TEMPLATES = {
-        PromptType.RAG_GENERATION: PromptTemplate(
-            system="""You are an AI assistant that answers questions strictly based on the retrieved context provided.
+    PromptType.RAG_GENERATION: PromptTemplate(
+        system="""You are an AI assistant that answers questions strictly based on the retrieved context provided.
 Do not use outside knowledge or make assumptions beyond this context.
 If the context does not contain enough information to answer, clearly say so.
 Always respond in a clear, concise, and professional manner.""",
-            user="""Context:
+        user="""Context:
 {context}
 
 Question:
@@ -42,12 +42,16 @@ Question:
 Instructions:
 - Use only the information from the context above.
 - If the answer is not explicitly present, respond with "The provided context does not contain enough information to answer."
-- Write your answer in clear, concise, and professional language.
-- Do not include references to the instructions or the word 'context' in your answer.
+- For every sentence or paragraph that uses information from a specific chunk, indicate the corresponding chunk number in square brackets right after it. Example:
+  "IAM allows defining permissions for users and resources. [1]"
+- If multiple chunks support the same sentence, list them together: "[1, 3]".
+- Do not list chunks that were not actually used.
+- Do not include references to these instructions or the word 'context' in your answer.
+- Write in clear, concise, and professional language.
 
 Answer:""",
-            description="RAG generation prompt for answering questions based on context"
-        ),
+        description="RAG generation prompt where the LLM cites chunk numbers inline next to the information used"
+    ),
     }
 
 

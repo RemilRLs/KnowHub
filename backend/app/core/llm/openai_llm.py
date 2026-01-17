@@ -69,3 +69,41 @@ class OpenAILLM(BaseLLM):
         except Exception as e:
             logger.error(f"OpenAI API error: {str(e)}", exc_info=True)
             raise
+
+    def stream_chat(
+            self,
+            messages: List[Dict[str, str]],
+            **kwargs
+    ):
+        params = self._merge_params(**kwargs)
+
+        try:
+            logger.info(f"Streaming OpenAI API with model '{self.model}'")
+
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=params["temperature"],
+                max_tokens=params["max_tokens"],
+                stream=True,
+                **{k: v for k, v in params.items() if k not in ["temperature", "max_tokens"]}
+            )
+
+            for chunk in response:
+                if not chunk.choices:
+                    continue
+
+                delta = chunk.choices[0].delta
+                token = None
+
+                if hasattr(delta, "content"):
+                    token = delta.content
+                elif isinstance(delta, dict):
+                    token = delta.get("content")
+
+                if token is not None:
+                    yield token
+
+        except Exception as e:
+            logger.error(f"OpenAI streaming error: {str(e)}", exc_info=True)
+            raise

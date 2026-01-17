@@ -38,7 +38,7 @@ class BaseLLM(ABC):
         prompt: str,
         system_prompt: Optional[str] = None,
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> str:
         """
         Generate text based on the prompt.
 
@@ -48,10 +48,11 @@ class BaseLLM(ABC):
             **kwargs: Additional parameters for generation.
 
         Returns:
-            A dictionary with generated text and metadata.
+            Generated text
         """
 
         pass
+
 
     @abstractmethod
     def generate_chat(
@@ -71,6 +72,14 @@ class BaseLLM(ABC):
         """
 
         pass
+
+    def stream_chat(
+        self,
+        messages: List[Dict[str, str]],
+        **kwargs
+    ):
+        raise NotImplementedError("Streaming not supported by this provider")
+
     
     def _merge_params(self, **override_params) -> Dict[str, Any]:
         """

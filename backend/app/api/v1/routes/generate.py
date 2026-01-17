@@ -1,22 +1,24 @@
+import json
 import logging
 import time 
 
-
-
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import StreamingResponse
 from dramatiq.results import ResultTimeout, ResultMissing
 
-from app.api.v1.schemas.generate import GenerateRequest, GenerateResponse, GenerationResult
+from app.api.v1.schemas.generate import GenerateRequest, GenerateResponse, GenerationResult, GenerateStreamRequest
 from app.api.v1.schemas.ingest import JobStatusReq
-from app.tasks.generate import generate_answer
+from app.tasks.generate import generate_answer, generate_answer_stream, STREAM_PREFIX
 # Redis
 from app.core.redis_config import redis_client
 from app.tasks import results_backend
 
+
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-@router.post("/generate", response_model=GenerateResponse)
+@router.post("/", response_model=GenerateResponse)
 def generate_endpoint(req: GenerateRequest) -> GenerateResponse:
     """
     Submits a RAG generation job to the worker queue.
@@ -54,9 +56,72 @@ def generate_endpoint(req: GenerateRequest) -> GenerateResponse:
             status_code=500,
             detail=f"Failed to submit generation job: {str(e)}"
         )
+
+
+@router.get("/stream")
+def stream_generate(req: GenerateStreamRequest = Depends()):
+    job_id = f"stream-{int(time.time() * 1000)}-{id(req)}"
+    stream_key = f"{STREAM_PREFIX}:{job_id}"
+
+    generate_answer_stream.send(
+        job_id=job_id,
+        query=req.query,
+        collection=req.collection,
+        k=req.k,
+        sources=req.sources,
+        temperature=req.temperature,
+    )
+
+    def event_stream():
+        last_id = "0-0"
+        try:
+            while True:
+                results = redis_client.xread(
+                    {stream_key: last_id},
+                    block=1000,
+                    count=10,
+                )
+                if not results:
+                    continue
+
+                _, entries = results[0]
+                for entry_id, data in entries:
+                    last_id = entry_id
+                    event_type = data.get("type", "token")
+                    payload_data = data.get("data", "")
+
+                    try:
+                        payload_data = json.loads(payload_data) if payload_data else ""
+                    except json.JSONDecodeError:
+                        pass
+
+                    if event_type == "token":
+                        payload = json.dumps({"token": payload_data}, ensure_ascii=False)
+                        yield f"data: {payload}\n\n"
+                    else:
+                        payload = json.dumps(payload_data, ensure_ascii=False)
+                        yield f"event: {event_type}\ndata: {payload}\n\n"
+                        if event_type in {"done", "error"}:
+                            return
+        except Exception as e:
+            logger.error(f"Error streaming generation: {str(e)}", exc_info=True)
+            payload = json.dumps({"error": str(e)})
+            yield f"event: error\ndata: {payload}\n\n"
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers=headers,
+    )
+
     
 
-@router.post("/generate/status")
+@router.post("/status")
 def get_generation_status(req: JobStatusReq):
     """
     Checks the status of a generation job.
@@ -93,11 +158,13 @@ def get_generation_status(req: JobStatusReq):
             }
             
         except ResultMissing:
-            logger.warning(f"Generation job {req.job_id} not found")
+            # If the result is missing, it likely means the job is still in the queue or processing
+            # but hasn't finished yet. For polling purposes, we treat this as pending.
+            logger.info(f"Generation job {req.job_id} result missing (likely pending)")
             return {
                 "job_id": req.job_id,
-                "status": "not_found",
-                "message": "Job not found or expired"
+                "status": "pending",
+                "message": "Job is processing"
             }
             
     except Exception as e:

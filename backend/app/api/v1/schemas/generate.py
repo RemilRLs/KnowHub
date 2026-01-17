@@ -5,8 +5,17 @@ class GenerateRequest(BaseModel):
     query: str
     collection: str 
     k: int = 10
-    sources: Optional[List[str]]
+    sources: Optional[List[str]] = None
     temperature: float = 0.5
+
+class GenerateStreamRequest(BaseModel):
+    query: str
+    collection: str
+    k: int = 10
+    sources: Optional[List[str]] = None
+    temperature: float = 0.5
+
+
 
 class GenerateResponse(BaseModel):
     """

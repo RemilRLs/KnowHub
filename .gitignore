@@ -5,3 +5,6 @@ __pycache__/
 
 logs/
 *.log
+
+TODO.md
+backend/data/*
