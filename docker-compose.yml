@@ -3,9 +3,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.backend 
-    command: >
-      uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
-      --reload --reload-dir /app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
       
     ports:
       - "8000:8000" 
@@ -14,7 +12,8 @@ services:
     volumes:
       - ./backend/app:/app/app:rw
       - ./backend/logs:/app/logs:rw
-      - hf-cache:/home/appuser/.cache/huggingface
+      - ./backend/data:/data:rw
+      - hf-cache:/home/appuser/.cache/huggingface # To save Hugging Face model cache (to avoid when we restart the container or rebuild it to download it again)
     env_file:
       - ./backend/.env
     healthcheck:
@@ -42,6 +41,8 @@ services:
       - ./backend/.env
     volumes:
       - ./backend/app:/app/app:rw
+      - ./backend/logs:/app/logs:rw
+      - ./backend/data:/data:rw
     depends_on:
       api:
         condition: service_healthy
