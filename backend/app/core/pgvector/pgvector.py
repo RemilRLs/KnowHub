@@ -9,6 +9,26 @@ from langchain_core.documents import Document
 
 from app.core.pgvector.pgvector_utils import PgVectorUtils
 from app.core.pgvector.pgpool_connector import PgPoolConnector
+from app.core.pgvector.sql_queries import (
+    CHECK_EXISTING_SOURCES_QUERY,
+    CREATE_HNSW_INDEX_QUERY,
+    CREATE_IVFFLAT_INDEX_QUERY,
+    CREATE_TABLE_QUERY,
+    DELETE_ROWS_BY_SOURCE_QUERY,
+    DROP_TABLE_QUERY,
+    ENSURE_EXTENSION_QUERY,
+    INSERT_CHUNK_QUERY,
+    LIST_TABLES_QUERY,
+    READ_EMBEDDINGS_QUERY,
+    READ_EMBEDDINGS_SELECT_COLS,
+    READ_EMBEDDINGS_WITH_WHERE_QUERY,
+    READ_FTS_QUERY,
+    SET_HNSW_EF_SEARCH_QUERY,
+    TABLE_EXISTS_QUERY,
+    WHERE_SOURCE_QUERY,
+    WHERE_THRESHOLD_QUERY,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -36,15 +56,10 @@ class PgVectorStore:
             bool: True if the table exists, False otherwise.
         """
         with self.pg_pool.cursor() as cur:
-            cur.execute("""
-                SELECT EXISTS (
-                    SELECT 1
-                    FROM information_schema.tables
-                    WHERE table_schema = %s AND table_name = %s
-                );
-            """, (self.schema, table_name))
+            cur.execute(TABLE_EXISTS_QUERY, (self.schema, table_name))
             
             return bool(cur.fetchone()[0])
+
         
     def ensure_extension(self):
         """
@@ -58,7 +73,8 @@ class PgVectorStore:
             psycopg.Error: If there is an error connecting to the database or executing the SQL command.
         """
         with self.pg_pool.cursor() as cur:
-            cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+            cur.execute(ENSURE_EXTENSION_QUERY)
+
 
     def ensure_index_type(self, index_type: str) -> bool:
         valid_index_types = ["hnsw", "ivfflat"]
@@ -107,30 +123,12 @@ class PgVectorStore:
 
         with self.pg_pool.cursor() as cur:
             cur.execute(
-                sql.SQL("""
-                    CREATE TABLE IF NOT EXISTS {tbl} (
-                    id BIGSERIAL PRIMARY KEY,
-                    embedding VECTOR({dim}) NOT NULL,
-                    text TEXT NOT NULL,
-                    source VARCHAR(512) NOT NULL,
-                    page INT NOT NULL,
-                    creation_date TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    skillsets VARCHAR(256)[],
-                    title VARCHAR(512),
-                    author VARCHAR(256),
-                    url TEXT,
-                    ts_vector_en TSVECTOR GENERATED ALWAYS AS (
-                        to_tsvector('english', coalesce(text, ''))
-                    ) STORED,
-                    ts_vector_fr TSVECTOR GENERATED ALWAYS AS (
-                        to_tsvector('french', coalesce(text, ''))
-                    ) STORED
-                    );
-                """).format(
+                sql.SQL(CREATE_TABLE_QUERY).format(
                     tbl=tbl,
                     dim=sql.Literal(int(dim))
                 )
             )
+
 
             # No index have been choosed (either HNSW or IVFFLAT).
             if index_type is None:
@@ -139,11 +137,7 @@ class PgVectorStore:
             # Creation of the index HNSW
             if index_type.lower() == "hnsw":
                 cur.execute(
-                    sql.SQL("""
-                        CREATE INDEX IF NOT EXISTS {idx} ON {tbl}
-                        USING hnsw (embedding vector_cosine_ops)
-                        WITH (m = {m}, ef_construction = {ef});
-                    """).format(
+                    sql.SQL(CREATE_HNSW_INDEX_QUERY).format(
                         idx=idx,
                         tbl=tbl,
                         m=sql.Literal(hnsw_m),
@@ -152,16 +146,13 @@ class PgVectorStore:
                 )
             elif index_type.lower() == "ivfflat":
                 cur.execute(
-                    sql.SQL("""
-                        CREATE INDEX IF NOT EXISTS {idx} ON {tbl}
-                        USING ivfflat (embedding vector_cosine_ops)
-                        WITH (lists = {lists})
-                    """).format(
+                    sql.SQL(CREATE_IVFFLAT_INDEX_QUERY).format(
                         idx=idx,
                         tbl=tbl,
                         lists=sql.Literal(ivf_lists)
                     )
                 )
+
             else:
                 raise ValueError("index_type must be 'hnsw', 'ivfflat', or None")
             return True
@@ -180,12 +171,11 @@ class PgVectorStore:
 
         with self.pg_pool.cursor() as cur:
             cur.execute(
-                sql.SQL("""
-                    DROP TABLE IF EXISTS {};
-                """).format(
-                    tbl
+                sql.SQL(DROP_TABLE_QUERY).format(
+                    tbl=tbl
                 )
             )
+
             return True
         
     def list_tables(self) -> List[str]:
@@ -193,12 +183,9 @@ class PgVectorStore:
         
         """
         with self.pg_pool.cursor() as cur:
-            cur.execute("""
-                SELECT table_name
-                FROM information_schema.tables
-                WHERE table_schema = %s;
-            """, (self.schema,))
+            cur.execute(LIST_TABLES_QUERY, (self.schema,))
             tables = [row[0] for row in cur.fetchall()]
+
         return tables
     
     def delete_rows_by_source(self, table_name: str, source: str) -> int:
@@ -230,13 +217,12 @@ class PgVectorStore:
 
         with self.pg_pool.cursor() as cur:
             cur.execute(
-                sql.SQL("""
-                    DELETE FROM {} WHERE source = %s;
-                """).format(
-                    tbl
+                sql.SQL(DELETE_ROWS_BY_SOURCE_QUERY).format(
+                    tbl=tbl
                 ),
                 (source,)
             )
+
             deleted_count = cur.rowcount
         return deleted_count
 
@@ -329,13 +315,10 @@ class PgVectorStore:
         # Use ANY to check multiple sources in a single query
         with self.pg_pool.cursor() as cur:
             cur.execute(
-                sql.SQL("""
-                    SELECT DISTINCT source 
-                    FROM {} 
-                    WHERE source = ANY(%s)
-                """).format(table_identifier),
+                sql.SQL(CHECK_EXISTING_SOURCES_QUERY).format(tbl=table_identifier),
                 (sources,)
             )
+
             existing = {row[0] for row in cur.fetchall()}
             
         if existing:
@@ -358,10 +341,8 @@ class PgVectorStore:
         collection = collection.lower()
         table_identifier = sql.Identifier(collection)
         
-        insert_query = sql.SQL("""
-            INSERT INTO {} (embedding, text, source, page, title, author, url)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """).format(table_identifier)
+        insert_query = sql.SQL(INSERT_CHUNK_QUERY).format(tbl=table_identifier)
+
         
         inserted_count = 0
         with self.pg_pool.cursor() as cur:
@@ -388,7 +369,7 @@ class PgVectorStore:
 
     def read_embeddings(self, 
                         table: str, # Name of the collection (table).
-                        prompt: str, # Prompt to be embedded.
+                        prompt: str, # Prompt to be embedded (user query most of the time)
                         k: int = 16, # Number of nearest chunks to return
                         ef_search: Optional[int] = 150, # HNSW : Number of candidates considered during search (improves accuracy)
                         sources: Optional[List[str]] = None,
@@ -413,24 +394,22 @@ class PgVectorStore:
         table_identifier = sql.Identifier(table.lower())
 
         qvec = Vector(self.pg_utils.embed([prompt])[0])
-        select_sql = sql.SQL("id, text, source, page, skillsets, title, author, url, creation_date, embedding <-> %s AS distance")
+        select_sql = sql.SQL(READ_EMBEDDINGS_SELECT_COLS)
 
         # Build query with optional WHERE clause for sources and threshold
         where_clauses = []
         if sources is not None and len(sources) > 0:
-            where_clauses.append(sql.SQL("source = ANY(%s)"))
+            where_clauses.append(sql.SQL(WHERE_SOURCE_QUERY))
         if threshold is not None:
-            where_clauses.append(sql.SQL("embedding <-> %s <= %s")) # First %s is query vector, second is threshold
+            where_clauses.append(sql.SQL(WHERE_THRESHOLD_QUERY)) # First %s is query vector, second is threshold
         
         if where_clauses:
             where_sql = sql.SQL(" AND ").join(where_clauses)
-            query = sql.SQL("""
-                SELECT {cols}
-                FROM {table}
-                WHERE {where}
-                ORDER BY embedding <-> %s 
-                LIMIT %s
-            """).format(cols=select_sql, table=table_identifier, where=where_sql)
+            query = sql.SQL(READ_EMBEDDINGS_WITH_WHERE_QUERY).format(
+                cols=select_sql,
+                table=table_identifier,
+                where=where_sql,
+            )
             
             query_params = [qvec] # User query and other parameters
             if sources is not None and len(sources) > 0:
@@ -440,19 +419,23 @@ class PgVectorStore:
             query_params.extend([qvec, k])
             query_params = tuple(query_params)
         else: # Nearest neighbor search without filtering (no WHERE clause)
-            query = sql.SQL("""
-                SELECT {cols}
-                FROM {table}
-                ORDER BY embedding <-> %s 
-                LIMIT %s
-            """).format(cols=select_sql, table=table_identifier)
+            query = sql.SQL(READ_EMBEDDINGS_QUERY).format(
+                cols=select_sql,
+                table=table_identifier,
+            )
             query_params = (qvec, qvec, k)
+
 
         results: List[Dict[str, Any]] = []
 
         with self.pg_pool.cursor() as cur:
             if ef_search is not None:
-                cur.execute(sql.SQL("SET hnsw.ef_search = {}").format(sql.Literal(int(ef_search))))
+                cur.execute(
+                    sql.SQL(SET_HNSW_EF_SEARCH_QUERY).format(
+                        sql.Literal(int(ef_search))
+                    )
+                )
+
             
             cur.execute(query, query_params)
             rows = cur.fetchall()
@@ -491,7 +474,8 @@ class PgVectorStore:
             List[Dict[str, Any]]: List of deduplicated and re-ranked results with RRF scores.
         """
         # Get results from both methods
-        vector_results = self.read_embeddings(table, prompt, embed_func, k, ef_search) 
+        vector_results = self.read_embeddings(table, prompt, k, ef_search) 
+
         fts_results = self.read_fts(table, prompt, k)
         
         # RRF scoring: score = sum(1 / (rank + k)) for each retrieval method
@@ -541,23 +525,8 @@ class PgVectorStore:
         Implementation of Full-Text Search.
         """
         
-        query = sql.SQL("""
-            WITH q AS (
-            SELECT
-                websearch_to_tsquery('english', %(q)s) AS q_en,
-                websearch_to_tsquery('french',  %(q)s) AS q_fr
-            )
-            SELECT
-            id, text, source, page, creation_date, title, author, url,
-            GREATEST(
-                COALESCE(ts_rank_cd(ts_vector_en, q.q_en), 0),
-                COALESCE(ts_rank_cd(ts_vector_fr, q.q_fr), 0)
-            ) AS fts_rank
-            FROM {table}, q
-            WHERE (ts_vector_en @@ q.q_en) OR (ts_vector_fr @@ q.q_fr)
-            ORDER BY fts_rank DESC NULLS LAST
-            LIMIT %(k)s;
-        """).format(table=sql.Identifier(table.lower()))
+        query = sql.SQL(READ_FTS_QUERY).format(table=sql.Identifier(table.lower()))
+
 
         results: List[Dict[str, Any]] = []
 
