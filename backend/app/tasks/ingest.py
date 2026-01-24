@@ -68,8 +68,6 @@ def validate_and_promote(doc_id: str,
             collection=collection,
         )
 
-        
-
         return {
             "stage": "validated",
             "doc_id": doc_id,
@@ -110,10 +108,9 @@ def ingest_document(doc_id: str,
         docs = pipeline.ingest(
             file_paths=[downloaded_path],
             doc_id=doc_id,
+            processed_key=s3_key, # We pass the processed key here for future use like downloading the source by the user
             collection=collection
         )
-
-        # TODO: split -> embeddings -> upsert pgvector here
 
         return {
             "stage": "indexed",

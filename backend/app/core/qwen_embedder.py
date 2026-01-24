@@ -5,7 +5,15 @@ from transformers import AutoTokenizer, AutoModel
 from typing import List
 
 
+_embedder_instance = None
+
+
+def get_embedder(model_name: str = "Qwen/Qwen3-Embedding-0.6B"):
+    return QwenEmbedder.get_embedder(model_name=model_name)
+
+
 class QwenEmbedder:
+
     """
     
     """
@@ -31,9 +39,15 @@ class QwenEmbedder:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+    @staticmethod
+    def get_embedder(model_name: str = "Qwen/Qwen3-Embedding-0.6B"):
+        global _embedder_instance
+        if _embedder_instance is None:
+            _embedder_instance = QwenEmbedder(model_name=model_name)
+        return _embedder_instance
+
 
     @staticmethod
-
     def _last_token_pool(last_hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """
         Applies a pooling operation on the last hidden states of a sequence based on the attention mask.
@@ -81,22 +95,3 @@ class QwenEmbedder:
             embeddings = F.normalize(embeddings, p=2, dim=1)  # Normalize the embeddings to unit length (L2 norm)
 
             return embeddings.cpu().float() 
-    
-if __name__ == "__main__":
-    embedder = QwenEmbedder()
-
-    texts = [
-        "The capital of China is Beijing.",
-        "Gravity pulls objects toward each other.",
-        "Paris is the capital of France."
-    ]
-
-    embeddings = embedder.embed(texts)
-    print(f"Shape des embeddings : {embeddings.shape}") 
-
-    norms = torch.norm(embeddings, dim=1)
-    print(f"Normes des vecteurs : {norms}")
-
-    sim = embeddings @ embeddings.T
-    print("Matrice de similarité cosinus :")
-    print(sim)

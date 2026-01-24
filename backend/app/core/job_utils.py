@@ -13,7 +13,7 @@ def _resolve_actor_name(actor: ActorLike) -> str:
         "actor must be a str (actor name) or a Dramatiq actor (with .actor_name)."
     )
 
-def build_message_for(job_id: str, queue_name: str, actor: Optional[ActorLike]) -> Message:
+def build_message_for(job_id: str, queue_name: str, actor: Optional[ActorLike]) -> Message: #t
 
     if not actor:
         raise ValueError("actor is required to fetch results (need actor_name).")

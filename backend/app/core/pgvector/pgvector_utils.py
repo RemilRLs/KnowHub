@@ -1,50 +1,17 @@
-from typing import Any, Callable, List, Optional, Tuple, Dict
-import time
 import logging
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from typing import Any, List, Tuple, Dict
+from app.core.qwen_embedder import get_embedder
 
 logger = logging.getLogger(__name__)
 
 class PgVectorUtils:
     def __init__(self, embed_endpoint="http://api:8000/api/v1/ingest/embed"):
         self.embed_endpoint = embed_endpoint
-        
+        self.embedder = get_embedder()
 
     def embed(self, texts: List[str]) -> List[List[float]]:
-        """
-        Computes embeddings for a list of texts via the embedding API.
-        
-        Args:
-            texts: List of texts to embed
-            
-        Returns:
-            List of embedding vectors
-            
-        Raises:
-            RuntimeError: If the embedding service is not accessible
-        """
-        if not texts:
-            return []
-
-        try:
-            response = requests.post(
-                self.embed_endpoint,
-                json={"texts": texts},
-                timeout=120
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            if "embeddings" not in data:
-                raise ValueError("Invalid response: 'embeddings' field is missing")
-
-            return data["embeddings"]
-
-        except requests.exceptions.RequestException as e:
-            raise RuntimeError(f"Error while calling the embedding service: {e}")
+        return self.embedder.embed(texts)
     
     def prepare_chunks(
             self,
@@ -54,7 +21,7 @@ class PgVectorUtils:
         texts: List[str] = []
         metadatas: List[Dict[str, Any]] = []
 
-        ALLOWED_KEYS = {"page", "ext", "file_name", "file_sha256", "ingested_at"}
+        ALLOWED_KEYS = {"page", "ext", "file_name", "file_sha256", "ingested_at", "url"}
 
         for d in docs:
             text = (d.page_content or "").strip()
@@ -75,7 +42,7 @@ class PgVectorUtils:
 
         embeddings: List[List[float]] = self.embed(texts) if texts else []
 
-        if embeddings:
+        if len(embeddings) > 0:
             print(f"Got embeddings: {len(embeddings)} vectors of size {len(embeddings[0])}")
 
         return texts, metadatas, embeddings
