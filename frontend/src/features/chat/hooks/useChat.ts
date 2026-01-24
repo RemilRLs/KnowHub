@@ -79,9 +79,10 @@ export function useChat(selectedCollection: string) {
         flush();
 
         let metadata: MessageMetadata | undefined;
-
+ 
         try {
           const data = JSON.parse(event.data);
+          console.log("[useChat] Received done event with data:", data);
           metadata = {
             sources: data.sources,
             retrieved_chunks: data.retrieved_chunks,
@@ -91,10 +92,14 @@ export function useChat(selectedCollection: string) {
             temperature: data.temperature,
             max_tokens: data.max_tokens,
             k: data.k,
+            chunk_map: data.chunk_map,
+            source_map: data.source_map,
           };
+          console.log("[useChat] Parsed metadata:", metadata);
         } catch (error) {
           console.warn("Could not parse metadata from done event:", error);
         }
+
 
         stream.close();
         activeStreamRef.current = null;
@@ -111,6 +116,7 @@ export function useChat(selectedCollection: string) {
               : msg
           )
         );
+        console.log("[useChat] Updated message with metadata for ID:", messageId);
 
         setIsLoading(false);
       });

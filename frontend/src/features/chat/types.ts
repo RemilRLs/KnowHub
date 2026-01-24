@@ -14,6 +14,14 @@ export interface Message {
 /**
  * Metadata associated with an assistant message response
  */
+export interface ChunkReference {
+    chunk_number: number;
+    text: string;
+    source: string;
+    page?: number | string | null;
+    processed_key?: string | null;
+}
+
 export interface MessageMetadata {
     sources?: string[];
     retrieved_chunks?: number;
@@ -23,7 +31,10 @@ export interface MessageMetadata {
     temperature?: number;
     max_tokens?: number;
     k?: number;
+    chunk_map?: ChunkReference[];
+    source_map?: Record<string, string>;
 }
+
 
 /**
  * Parameters for streaming chat completion
@@ -32,6 +43,12 @@ export interface StreamParams {
     query: string;
     collection: string;
     k: string;
+}
+
+export interface DownloadUrlResponse {
+    key: string;
+    url: string;
+    expires_in: number;
 }
 
 /**

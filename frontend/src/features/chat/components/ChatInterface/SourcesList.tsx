@@ -1,17 +1,16 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { FileText, Clock } from 'lucide-react';
 import { SourceBadge } from './SourceBadge';
+import { fetchDownloadUrl } from '../../api/chat.api';
 
 /**
  * Props for the SourcesList component
  */
 interface SourcesListProps {
-    /** Array of source file names used to generate the response */
     sources: string[];
-    /** Time taken to retrieve chunks in milliseconds */
     retrievalTime?: number;
-    /** Number of chunks retrieved */
     chunkCount?: number;
+    sourceMap?: Record<string, string>;
 }
 
 /**
@@ -24,12 +23,36 @@ interface SourcesListProps {
  * @param retrievalTime - Optional retrieval time in milliseconds
  * @param chunkCount - Optional number of chunks retrieved
  */
-export const SourcesList: React.FC<SourcesListProps> = ({ 
-    sources, 
+export const SourcesList: React.FC<SourcesListProps> = ({
+    sources,
     retrievalTime,
-    chunkCount 
+    chunkCount,
+    sourceMap,
 }) => {
-    if (!sources || sources.length === 0) return null;
+    console.log("[SourcesList] Rendering with sources:", sources, "retrievalTime:", retrievalTime, "chunkCount:", chunkCount);
+    if (!sources || sources.length === 0) {
+        console.log("[SourcesList] No sources to display");
+        return null;
+    }
+
+    const [downloadingSource, setDownloadingSource] = useState<string | null>(null);
+
+    const handleDownload = async (source: string) => {
+        const key = sourceMap?.[source];
+        if (!key || downloadingSource) {
+            return;
+        }
+
+        try {
+            setDownloadingSource(source);
+            const response = await fetchDownloadUrl(key);
+            window.open(response.url, '_blank', 'noopener,noreferrer');
+        } catch (error) {
+            console.error(`[SourcesList] Download failed for ${source}:`, error);
+        } finally {
+            setDownloadingSource(null);
+        }
+    };
 
     return (
         <div className="mt-2 space-y-2">
@@ -55,9 +78,17 @@ export const SourcesList: React.FC<SourcesListProps> = ({
             </div>
             
             <div className="flex flex-wrap gap-2">
-                {sources.map((source) => (
-                        <SourceBadge source={source} />
-                ))}
+                {sources.map((source, index) => {
+                    const isDownloadable = Boolean(sourceMap?.[source]);
+                    return (
+                        <SourceBadge
+                            key={`${source}-${index}`}
+                            source={source}
+                            onClick={isDownloadable ? () => handleDownload(source) : undefined}
+                            isLoading={downloadingSource === source}
+                        />
+                    );
+                })}
             </div>
         </div>
     );

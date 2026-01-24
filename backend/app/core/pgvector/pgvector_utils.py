@@ -21,7 +21,7 @@ class PgVectorUtils:
         texts: List[str] = []
         metadatas: List[Dict[str, Any]] = []
 
-        ALLOWED_KEYS = {"page", "ext", "file_name", "file_sha256", "ingested_at"}
+        ALLOWED_KEYS = {"page", "ext", "file_name", "file_sha256", "ingested_at", "url"}
 
         for d in docs:
             text = (d.page_content or "").strip()
@@ -42,7 +42,7 @@ class PgVectorUtils:
 
         embeddings: List[List[float]] = self.embed(texts) if texts else []
 
-        if embeddings:
+        if len(embeddings) > 0:
             print(f"Got embeddings: {len(embeddings)} vectors of size {len(embeddings[0])}")
 
         return texts, metadatas, embeddings

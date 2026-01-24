@@ -36,6 +36,8 @@ def _build_context(chunks: List[Dict[str, Any]]) -> str:
         text = chunk.get('text', '')
         source = chunk.get('source', 'Unknown')
         page = chunk.get('page', 'N/A')
+        processed_key = chunk.get('url')
+        processed_key = chunk.get('url')
         distance = chunk.get('distance', 0.0)
         
         context_parts.append(
@@ -44,19 +46,27 @@ def _build_context(chunks: List[Dict[str, Any]]) -> str:
     
     return "\n---\n".join(context_parts)
 
-def _get_chunk_numbers(retrieved_chunks: List[Dict[str, Any]]) -> Dict[str, List[int]]:
+def _get_chunk_numbers(retrieved_chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Map chunk text to its chunk numbers.
+    Map chunk text with its metadata (chunk number, source, page).
+    Returns a list of dictionaries with chunk details.
     """
-
-    chunk_map = {}
+    chunk_list = []
     for idx, chunk in enumerate(retrieved_chunks, 1):
         text = chunk.get('text', '')
-        if text not in chunk_map:
-            chunk_map[text] = []
-        chunk_map[text].append(idx)
-
-    return chunk_map
+        source = chunk.get('source', 'Unknown')
+        page = chunk.get('page', 'N/A')
+        processed_key = chunk.get('url')
+        
+        chunk_list.append({
+            "chunk_number": idx,
+            "text": text,
+            "source": source,
+            "page": page + 1 if (isinstance(page, int) and page >= 0) else page,
+            "processed_key": processed_key
+        })
+    
+    return chunk_list
 
 def _get_unique_source(retrieved_chunks: List[Dict[str, Any]]) -> List[str]:
     """
@@ -67,6 +77,20 @@ def _get_unique_source(retrieved_chunks: List[Dict[str, Any]]) -> List[str]:
         source = chunk.get('source', 'Unknown')
         sources.add(source)
     return list(sources)
+
+
+def _get_source_mappings(retrieved_chunks: List[Dict[str, Any]]) -> Dict[str, str]:
+    """
+    Extract unique sources and map them to their processed_key (URL in MinIO).
+    Returns a dictionary: {source_name: processed_key}
+    """
+    source_map = {}
+    for chunk in retrieved_chunks:
+        source = chunk.get('source', 'Unknown')
+        processed_key = chunk.get('url')
+        if source not in source_map and processed_key:
+            source_map[source] = processed_key
+    return source_map
 
 def _generate_with_llm(
         query: str,
@@ -277,6 +301,7 @@ def generate_answer_stream(
         generation_time = (time.time() - generation_start) * 1000
         total_time = (time.time() - start_time) * 1000
         unique_chunk_sources = _get_unique_source(retrieved_chunks)
+        source_map = _get_source_mappings(retrieved_chunks)
         chunk_map = _get_chunk_numbers(retrieved_chunks)
 
         metadata = {
@@ -285,6 +310,7 @@ def generate_answer_stream(
             "generation_time_ms": generation_time,
             "total_time_ms": total_time,
             "chunk_map": chunk_map,
+            "source_map": source_map,
             "temperature": temperature,
             "max_tokens": max_tokens,
             "k": k
@@ -409,12 +435,14 @@ def generate_answer(
 
             logger.info(f"Answer : {answer}")
             unique_chunk_sources = _get_unique_source(retrieved_chunks)
+            source_map = _get_source_mappings(retrieved_chunks)
 
             return {
                 "status": "sucess",
                 "query": query,
                 "answer": answer,
                 "sources": unique_chunk_sources,
+                "source_map": source_map,
                 "retrieved_chunks": len(retrieved_chunks),
                 "retrieval_time_ms": retrieval_time,
                 "generation_time_ms": generation_time,

@@ -1,5 +1,5 @@
-import { buildStreamUrl } from '../../../shared/api/http';
-import type { StreamParams } from '../types';
+import { buildStreamUrl, http } from '../../../shared/api/http';
+import type { StreamParams, DownloadUrlResponse } from '../types';
 
 export function createStreamConnection(params: StreamParams): EventSource {
     const url = buildStreamUrl('/api/v1/generate/stream', {
@@ -9,4 +9,10 @@ export function createStreamConnection(params: StreamParams): EventSource {
     });
     
     return new EventSource(url);
+}
+
+export async function fetchDownloadUrl(key: string): Promise<DownloadUrlResponse> {
+    return http<DownloadUrlResponse>('/api/v1/files/download', {
+        params: { key },
+    });
 }

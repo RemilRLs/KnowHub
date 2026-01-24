@@ -29,6 +29,8 @@ class MinioClient:
         self.bucket = os.getenv("MINIO_BUCKET", "knowhub")
         self.secure = os.getenv("MINIO_SECURE", "false").lower() == "true"
 
+        print(f"MinioClient init: endpoint={self.internal_endpoint}, public_endpoint={self.public_endpoint}, bucket={self.bucket}, secure={self.secure}")
+
         self.client = Minio(
             self.internal_endpoint,
             access_key=self.access_key,

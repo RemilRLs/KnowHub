@@ -7,6 +7,7 @@ from pathlib import Path
 from app.pipeline.loader import DocumentLoader
 from app.pipeline.normalize import DocumentNormalizer
 from app.pipeline.splitter import DocumentSplitter
+from langchain_core.documents import Document
 
 from app.core.pgvector.pgvector import PgVectorStore
 from app.config.config import PGVECTOR_DSN
@@ -38,6 +39,7 @@ class IngestPipeline:
         self,
         file_paths: List[str | Path],
         doc_id: str,
+        processed_key: str,
         collection: str,
     ) -> Dict[str, Any]:
         """
@@ -50,6 +52,14 @@ class IngestPipeline:
         loaded_docs = self.loader.load_documents(paths)
         logger.info("Ingest: loaded %d document(s)", len(loaded_docs))
 
+        enriched_docs: List[Document] = []
+        for doc in loaded_docs:
+            meta = dict(doc.metadata or {})
+            meta["doc_id"] = doc_id
+            meta["processed_key"] = processed_key
+            meta["url"] = processed_key
+            enriched_docs.append(Document(page_content=doc.page_content, metadata=meta))
+
         if not loaded_docs:
             logger.warning("No documents loaded, skipping ingestion.")
             return {
@@ -60,7 +70,7 @@ class IngestPipeline:
 
         # Normalize document text
         normalizer = DocumentNormalizer()
-        normalized_docs = normalizer.normalize(loaded_docs)
+        normalized_docs = normalizer.normalize(enriched_docs)
         logger.info("Ingest: normalized %d document(s)", len(normalized_docs))
 
         # Split documents into smaller chunks
